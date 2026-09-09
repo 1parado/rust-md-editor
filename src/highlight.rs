@@ -53,12 +53,18 @@ impl Highlighter {
                 3 => Color::Cyan,
                 _ => Color::Gray,
             };
-            spans.push(Span::styled(line.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                line.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
         } else if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
             spans.push(Span::styled(line.to_string(), Style::default().fg(Color::Yellow)));
         } else if trimmed.starts_with('>') {
             spans.push(Span::styled(line.to_string(), Style::default().fg(Color::Green)));
-        } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
+        } else if trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+            || trimmed.starts_with("+ ")
+        {
             spans.push(Span::styled(line.to_string(), Style::default().fg(Color::Cyan)));
         } else {
             spans.extend(highlight_inline(line));
@@ -96,7 +102,7 @@ fn highlight_inline(line: &str) -> Vec<Span<'static>> {
             }
             let code: String = chars[start..i].iter().collect();
             spans.push(Span::styled(
-                format!("`{}"` , code),
+                format!("`{}`", code),
                 Style::default().fg(Color::Yellow),
             ));
             if i < chars.len() {
