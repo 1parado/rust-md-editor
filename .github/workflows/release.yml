@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version without v prefix (e.g. 0.2.0). Creates tag vX.Y.Z if needed.'
+        description: 'Version without v prefix (e.g. 0.2.0)'
         required: true
         default: '0.2.0'
 
@@ -16,7 +16,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: '-C target-cpu=generic'
 
 jobs:
   build:
@@ -47,12 +46,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Expand source from compressed blob
-        shell: bash
-        run: |
-          base64 -d src/main.rs.gz.b64 | gzip -d > src/main.rs
-          wc -l src/main.rs
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
