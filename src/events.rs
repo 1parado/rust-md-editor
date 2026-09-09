@@ -34,7 +34,9 @@ pub fn run_app(
                     match (key.code, key.modifiers) {
                         (KeyCode::Char('q'), KeyModifiers::CONTROL)
                         | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                            return Ok(());
+                            if app.request_quit() {
+                                return Ok(());
+                            }
                         }
                         (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
                             if let Err(e) = app.save() {
@@ -50,6 +52,18 @@ pub fn run_app(
                         }
                         (KeyCode::Char('S'), KeyModifiers::SHIFT) if app.focus == 1 => {
                             app.scroll_sync = !app.scroll_sync;
+                            app.status = format!(
+                                "scroll-sync {}",
+                                if app.scroll_sync { "ON" } else { "OFF" }
+                            );
+                        }
+                        (KeyCode::Home, _) if app.focus == 0 => app.buffer.home(),
+                        (KeyCode::End, _) if app.focus == 0 => app.buffer.end(),
+                        (KeyCode::Left, KeyModifiers::CONTROL) if app.focus == 0 => {
+                            app.buffer.move_word_left();
+                        }
+                        (KeyCode::Right, KeyModifiers::CONTROL) if app.focus == 0 => {
+                            app.buffer.move_word_right();
                         }
                         (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT)
                             if app.focus == 0 =>
@@ -74,29 +88,37 @@ pub fn run_app(
                         (KeyCode::Up, _) => {
                             if app.focus == 0 {
                                 app.buffer.move_up();
+                                app.sync_preview_from_editor();
                             } else {
                                 app.preview_scroll = app.preview_scroll.saturating_sub(1);
+                                app.sync_editor_from_preview();
                             }
                         }
                         (KeyCode::Down, _) => {
                             if app.focus == 0 {
                                 app.buffer.move_down();
+                                app.sync_preview_from_editor();
                             } else {
                                 app.preview_scroll = app.preview_scroll.saturating_add(1);
+                                app.sync_editor_from_preview();
                             }
                         }
                         (KeyCode::PageUp, _) => {
                             if app.focus == 0 {
                                 app.buffer.scroll_by(-10, 20);
+                                app.sync_preview_from_editor();
                             } else {
                                 app.preview_scroll = app.preview_scroll.saturating_sub(10);
+                                app.sync_editor_from_preview();
                             }
                         }
                         (KeyCode::PageDown, _) => {
                             if app.focus == 0 {
                                 app.buffer.scroll_by(10, 20);
+                                app.sync_preview_from_editor();
                             } else {
                                 app.preview_scroll = app.preview_scroll.saturating_add(10);
+                                app.sync_editor_from_preview();
                             }
                         }
                         _ => {}
@@ -109,12 +131,17 @@ pub fn run_app(
                         MouseEventKind::Down(MouseButton::Left) => {
                             if me.column < mid_x {
                                 app.focus = 0;
-                                let row = (me.row as usize).saturating_sub(1) + app.buffer.scroll;
+                                let row =
+                                    (me.row as usize).saturating_sub(1) + app.buffer.scroll;
                                 if row < app.buffer.lines.len() {
                                     app.buffer.cursor_row = row;
                                     let col = (me.column as usize).saturating_sub(6);
-                                    app.buffer.cursor_col =
-                                        col.min(app.buffer.lines[row].len());
+                                    let line = &app.buffer.lines[row];
+                                    let mut c = col.min(line.len());
+                                    while c > 0 && !line.is_char_boundary(c) {
+                                        c -= 1;
+                                    }
+                                    app.buffer.cursor_col = c;
                                 }
                             } else {
                                 app.focus = 1;
@@ -123,27 +150,19 @@ pub fn run_app(
                         MouseEventKind::ScrollUp => {
                             if app.focus == 0 || me.column < mid_x {
                                 app.buffer.scroll_by(-3, 20);
-                                if app.scroll_sync {
-                                    app.preview_scroll = app.preview_scroll.saturating_sub(3);
-                                }
+                                app.sync_preview_from_editor();
                             } else {
                                 app.preview_scroll = app.preview_scroll.saturating_sub(3);
-                                if app.scroll_sync {
-                                    app.buffer.scroll_by(-3, 20);
-                                }
+                                app.sync_editor_from_preview();
                             }
                         }
                         MouseEventKind::ScrollDown => {
                             if app.focus == 0 || me.column < mid_x {
                                 app.buffer.scroll_by(3, 20);
-                                if app.scroll_sync {
-                                    app.preview_scroll = app.preview_scroll.saturating_add(3);
-                                }
+                                app.sync_preview_from_editor();
                             } else {
                                 app.preview_scroll = app.preview_scroll.saturating_add(3);
-                                if app.scroll_sync {
-                                    app.buffer.scroll_by(3, 20);
-                                }
+                                app.sync_editor_from_preview();
                             }
                         }
                         _ => {}
