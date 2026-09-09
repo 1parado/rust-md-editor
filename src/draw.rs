@@ -6,13 +6,21 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
-/// Split `s` at byte index `col` on a char boundary (never panics).
 fn split_at_boundary(s: &str, col: usize) -> (&str, &str) {
     let mut idx = col.min(s.len());
     while idx > 0 && !s.is_char_boundary(idx) {
         idx -= 1;
     }
     s.split_at(idx)
+}
+
+/// Slice line content starting at byte offset `h_scroll` (char-boundary safe).
+fn line_from_hscroll(line: &str, h_scroll: usize) -> &str {
+    let mut idx = h_scroll.min(line.len());
+    while idx > 0 && !line.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    &line[idx..]
 }
 
 pub fn ui(f: &mut Frame, app: &mut App) {
@@ -29,28 +37,36 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let preview_area = main[1];
     let editor_height = editor_area.height.saturating_sub(2) as usize;
     let preview_height = preview_area.height.saturating_sub(2) as usize;
-    app.buffer.ensure_visible(editor_height.max(1));
+    let content_width = editor_area.width.saturating_sub(8) as usize; // gutter + borders
 
+    app.buffer.ensure_visible(editor_height.max(1));
+    app.buffer.ensure_h_visible(content_width.max(1));
+
+    let h = app.buffer.h_scroll;
     let mut source_lines: Vec<Line> = Vec::new();
     let start = app.buffer.scroll;
     let end = (start + editor_height).min(app.buffer.lines.len());
     for i in start..end {
-        let line = &app.buffer.lines[i];
+        let full = &app.buffer.lines[i];
+        let visible_text = line_from_hscroll(full, h);
         let mut spans = vec![Span::styled(
             format!("{:>4} ", i + 1),
             Style::default().fg(Color::DarkGray),
         )];
-        let content_spans = app.highlighter.highlight_source_line(line);
+        let content_spans = app.highlighter.highlight_source_line(visible_text);
+
+        // cursor col relative to h_scroll window
         if i == app.buffer.cursor_row && app.focus == 0 {
+            let rel_col = app.buffer.cursor_col.saturating_sub(h);
             let mut col = 0usize;
             let mut before = Vec::new();
             let mut after = Vec::new();
             let mut found = false;
             for sp in content_spans {
                 let len = sp.content.len();
-                if !found && col + len >= app.buffer.cursor_col {
-                    let rel = app.buffer.cursor_col.saturating_sub(col);
-                    let (b, a) = split_at_boundary(&sp.content, rel);
+                if !found && col + len >= rel_col {
+                    let r = rel_col.saturating_sub(col);
+                    let (b, a) = split_at_boundary(&sp.content, r);
                     if !b.is_empty() {
                         before.push(Span::styled(b.to_string(), sp.style));
                     }
@@ -101,7 +117,6 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         editor_area,
     );
 
-    // Preview is refreshed only in the event loop (debounce), not every frame.
     let preview_total = app.preview_lines.len();
     let p_start = if preview_total == 0 {
         0
@@ -142,13 +157,12 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "untitled.md".into());
     let status_text = format!(
-        " {} │ {} │ Ln {}, Col {} │ scroll E:{} P:{} ",
+        " {} │ {} │ Ln {}, Col {} │ h:{} ",
         app.status,
         path_str,
         app.buffer.cursor_row + 1,
         app.buffer.cursor_col + 1,
-        app.buffer.scroll,
-        app.preview_scroll
+        app.buffer.h_scroll
     );
     f.render_widget(
         Paragraph::new(status_text).style(Style::default().bg(Color::DarkGray).fg(Color::White)),
@@ -156,7 +170,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     );
 
     if app.show_help {
-        let help_area = centered_rect(70, 75, size);
+        let help_area = centered_rect(70, 80, size);
         let help_text = vec![
             Line::from(Span::styled(
                 " Shortcuts ",
@@ -164,21 +178,14 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             )),
             Line::from(""),
             Line::from("  Ctrl+S / Ctrl+Q     Save / Quit (dirty: twice)"),
+            Line::from("  Ctrl+F              Find (n/N next/prev, Esc)"),
             Line::from("  Ctrl+H / ?          Toggle help"),
-            Line::from("  Tab                 Switch focus (edit ↔ preview)"),
+            Line::from("  Tab                 Switch focus"),
             Line::from("  Home / End          Line start / end"),
             Line::from("  Ctrl+← / Ctrl+→     Word left / right"),
             Line::from("  Shift+S (preview)   Toggle scroll-sync"),
             Line::from(""),
-            Line::from("  Mouse click / wheel  Focus, cursor, scroll"),
-            Line::from("  (sync ON → proportional scroll)"),
-            Line::from(""),
-            Line::from(Span::styled(
-                " Incremental preview ",
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
-            Line::from("  Only changed blocks re-parse & re-highlight."),
-            Line::from("  Unclosed fences show \"streaming…\"."),
+            Line::from("  Long lines auto horizontal-scroll to keep cursor visible."),
             Line::from(""),
             Line::from("  Press any key to close"),
         ];
