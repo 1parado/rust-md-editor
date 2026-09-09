@@ -23,10 +23,13 @@ pub struct App {
     pub last_render: usize,
     pub preview_lines: Vec<Line<'static>>,
     pub need_preview_refresh: bool,
-    /// Search UI
     pub finding: bool,
     pub find_query: String,
     pub find_count: usize,
+    pub replacing: bool,
+    pub replace_with: String,
+    pub goto_mode: bool,
+    pub goto_input: String,
 }
 
 impl App {
@@ -38,14 +41,13 @@ impl App {
             (
                 String::from(
                     "# Hello, Streamdown-style Editor\n\n\
-                     这是一个**轻量级** Rust Markdown 编辑器。\n\n\
-                     按 **Ctrl+F** 可搜索，例如搜索 `streaming`。\n\n\
+                     Ctrl+F find · Ctrl+G goto · Ctrl+R replace\n\n\
+                     | A | B |\n\
+                     |---|---|\n\
+                     | 1 | 2 |\n\n\
                      ```rust\n\
-                     fn main() {\n\
-                         println!(\"Hello, world!\");\n\
-                     }\n\
-                     ```\n\n\
-                     > 未闭合的代码块会显示 *streaming…*\n",
+                     fn main() { println!(\"hi\"); }\n\
+                     ```\n",
                 ),
                 None,
             )
@@ -55,7 +57,7 @@ impl App {
             buffer: Buffer::new(&content),
             path,
             dirty: false,
-            status: "Ready · Ctrl+S save · Ctrl+F find · Ctrl+Q quit · ? help".into(),
+            status: "Ready · Ctrl+S · Ctrl+F find · Ctrl+G goto · Ctrl+R replace · ?".into(),
             show_help: false,
             quit_confirm: false,
             highlighter: Highlighter::new(),
@@ -70,6 +72,10 @@ impl App {
             finding: false,
             find_query: String::new(),
             find_count: 0,
+            replacing: false,
+            replace_with: String::new(),
+            goto_mode: false,
+            goto_input: String::new(),
         };
         app.refresh_preview();
         Ok(app)
@@ -83,7 +89,7 @@ impl App {
         self.last_render = rendered;
         self.preview_lines = self.preview.all_lines();
         self.need_preview_refresh = false;
-        if !self.quit_confirm && !self.finding {
+        if !self.quit_confirm && !self.finding && !self.replacing && !self.goto_mode {
             self.status = format!(
                 "blocks: {} reused / {} rendered · sync:{} · focus:{}",
                 reused,
@@ -146,35 +152,69 @@ impl App {
 
     pub fn start_find(&mut self) {
         self.finding = true;
+        self.replacing = false;
+        self.goto_mode = false;
         self.focus = 0;
-        self.status = format!("Find: {}_  (Enter/n next · N prev · Esc)", self.find_query);
+        self.status = format!(
+            "Find: {}_  (Enter/n · N · Ctrl+R replace · Esc)",
+            self.find_query
+        );
     }
 
     pub fn stop_find(&mut self) {
         self.finding = false;
+        self.replacing = false;
         self.status = "Find closed".into();
     }
 
-    /// Case-insensitive substring search. `forward` chooses direction.
+    pub fn start_replace(&mut self) {
+        if self.find_query.is_empty() {
+            self.start_find();
+            self.status = "Find: type query first, then Ctrl+R".into();
+            return;
+        }
+        self.finding = true;
+        self.replacing = true;
+        self.status = format!(
+            "Replace '{}' → {}_  (Enter=one · a=all · Esc)",
+            self.find_query, self.replace_with
+        );
+    }
+
+    pub fn start_goto(&mut self) {
+        self.goto_mode = true;
+        self.finding = false;
+        self.replacing = false;
+        self.goto_input.clear();
+        self.status = "Goto line: _  (Enter · Esc)".into();
+    }
+
+    pub fn apply_goto(&mut self) {
+        if let Ok(n) = self.goto_input.parse::<usize>() {
+            let row = n.saturating_sub(1).min(self.buffer.line_count().saturating_sub(1));
+            self.buffer.goto(row, 0);
+            self.status = format!("Goto line {}", row + 1);
+        } else {
+            self.status = "Goto: invalid line number".into();
+        }
+        self.goto_mode = false;
+    }
+
     pub fn find_next(&mut self, forward: bool) {
         let q = self.find_query.to_lowercase();
         if q.is_empty() {
             self.status = "Find: (empty query)".into();
             return;
         }
-
         let rows = self.buffer.lines.len();
         if rows == 0 {
             return;
         }
-
         let start_row = self.buffer.cursor_row;
         let start_col = self.buffer.cursor_col;
-
         let mut checked = 0usize;
         let mut row = start_row;
         let mut col = if forward {
-            // start after current position
             let line = &self.buffer.lines[row];
             let mut c = start_col;
             if c < line.len() {
@@ -191,7 +231,6 @@ impl App {
         while checked <= rows {
             let line = &self.buffer.lines[row];
             let lower = line.to_lowercase();
-
             if forward {
                 if col <= lower.len() {
                     if let Some(rel) = lower[col.min(lower.len())..].find(&q) {
@@ -199,7 +238,7 @@ impl App {
                         self.buffer.goto(row, abs);
                         self.find_count = self.count_matches(&q);
                         self.status = format!(
-                            "Find: '{}' · hit at {}:{} · {} total · n/N",
+                            "Find: '{}' · {}:{} · {} hits · n/N · Ctrl+R",
                             self.find_query,
                             row + 1,
                             abs + 1,
@@ -212,13 +251,12 @@ impl App {
                 row = (row + 1) % rows;
                 col = 0;
             } else {
-                // search backward in this line before col
                 let end = col.min(lower.len());
                 if let Some(rel) = lower[..end].rfind(&q) {
                     self.buffer.goto(row, rel);
                     self.find_count = self.count_matches(&q);
                     self.status = format!(
-                        "Find: '{}' · hit at {}:{} · {} total · n/N",
+                        "Find: '{}' · {}:{} · {} hits · n/N · Ctrl+R",
                         self.find_query,
                         row + 1,
                         rel + 1,
@@ -235,7 +273,6 @@ impl App {
                 col = self.buffer.lines[row].len();
             }
         }
-
         self.status = format!("Find: '{}' · no match", self.find_query);
     }
 
@@ -245,5 +282,72 @@ impl App {
             .iter()
             .map(|l| l.to_lowercase().matches(q_lower).count())
             .sum()
+    }
+
+    /// Replace match at cursor if it starts with find_query (case-insensitive).
+    pub fn replace_one(&mut self) {
+        let q = self.find_query.clone();
+        if q.is_empty() {
+            return;
+        }
+        let row = self.buffer.cursor_row;
+        let col = self.buffer.cursor_col;
+        let line = &self.buffer.lines[row];
+        let lower = line.to_lowercase();
+        let q_lower = q.to_lowercase();
+        if col <= lower.len() && lower[col..].starts_with(&q_lower) {
+            let end = col + q.len().min(line.len() - col);
+            // use actual length from original by matching char count of q_lower in lower
+            let matched_len = {
+                // find how many bytes in original correspond to q_lower length in lower slice
+                q_lower.len()
+            };
+            let end = (col + matched_len).min(line.len());
+            let mut end = end;
+            while end > col && !line.is_char_boundary(end) {
+                end -= 1;
+            }
+            self.buffer.lines[row].replace_range(col..end, &self.replace_with);
+            self.buffer.cursor_col = col + self.replace_with.len();
+            self.on_edit();
+            self.find_next(true);
+            self.status = format!("Replaced one · next? n · all: a");
+        } else {
+            self.find_next(true);
+            self.status = "No match at cursor — moved to next".into();
+        }
+    }
+
+    pub fn replace_all(&mut self) {
+        let q = self.find_query.to_lowercase();
+        if q.is_empty() {
+            return;
+        }
+        let mut total = 0usize;
+        for line in &mut self.buffer.lines {
+            let lower = line.to_lowercase();
+            if !lower.contains(&q) {
+                continue;
+            }
+            // case-insensitive replace by scanning
+            let mut out = String::new();
+            let mut rest = line.as_str();
+            let mut rest_lower = lower.as_str();
+            while let Some(pos) = rest_lower.find(&q) {
+                out.push_str(&rest[..pos]);
+                out.push_str(&self.replace_with);
+                rest = &rest[pos + q.len()..];
+                rest_lower = &rest_lower[pos + q.len()..];
+                total += 1;
+            }
+            out.push_str(rest);
+            *line = out;
+        }
+        if total > 0 {
+            self.on_edit();
+        }
+        self.replacing = false;
+        self.finding = false;
+        self.status = format!("Replaced {} occurrence(s)", total);
     }
 }
