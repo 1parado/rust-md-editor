@@ -1,8 +1,20 @@
 //! Desktop app state + egui UI
 use crate::preview::{LineKind, PreviewCache};
 use eframe::egui;
+use egui::{Color32, CornerRadius, Frame, Margin, RichText, Stroke, Vec2};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+
+// —— palette ——
+const BG: Color32 = Color32::from_rgb(22, 24, 28);
+const PANEL: Color32 = Color32::from_rgb(30, 33, 39);
+const PANEL2: Color32 = Color32::from_rgb(36, 40, 48);
+const BORDER: Color32 = Color32::from_rgb(55, 60, 72);
+const ACCENT: Color32 = Color32::from_rgb(88, 166, 255);
+const TEXT: Color32 = Color32::from_rgb(230, 234, 242);
+const MUTED: Color32 = Color32::from_rgb(140, 148, 164);
+const OK: Color32 = Color32::from_rgb(126, 231, 135);
+const WARN: Color32 = Color32::from_rgb(255, 200, 80);
 
 pub struct MdEditorApp {
     source: String,
@@ -26,6 +38,14 @@ impl MdEditorApp {
     pub fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>) -> Self {
         let mut style = (*cc.egui_ctx.style()).clone();
         style.visuals = egui::Visuals::dark();
+        style.visuals.window_fill = PANEL;
+        style.visuals.panel_fill = BG;
+        style.visuals.extreme_bg_color = PANEL2;
+        style.visuals.widgets.noninteractive.bg_fill = PANEL;
+        style.visuals.widgets.inactive.bg_fill = PANEL2;
+        style.visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(88, 166, 255, 60);
+        style.spacing.item_spacing = Vec2::new(8.0, 6.0);
+        style.spacing.window_margin = Margin::same(12);
         cc.egui_ctx.set_style(style);
 
         let (source, path) = if let Some(p) = path {
@@ -34,13 +54,13 @@ impl MdEditorApp {
             (
                 String::from(
                     "# rust-md-editor\n\n\
-桌面版 **Markdown** 编辑器（egui）。\n\n\
-- 增量预览\n\
-- 代码块高亮\n\
-- 打开 / 保存\n\n\
+支持 **中文** 显示与输入。\n\n\
+- `Enter`：确认输入法候选（不换行）\n\
+- `Ctrl+Enter`：换行\n\
+- `Ctrl+S` 保存 · `Ctrl+O` 打开 · `Ctrl+F` 查找\n\n\
 ```rust\n\
 fn main() {\n\
-    println!(\"Hello\");\n\
+    println!(\"你好\");\n\
 }\n\
 ```\n",
                 ),
@@ -57,7 +77,7 @@ fn main() {\n\
             last_render: 0,
             need_refresh: true,
             last_edit: Instant::now(),
-            status: "Ready · Ctrl+S save · Ctrl+O open · Ctrl+F find".into(),
+            status: "Ready · Enter 确认输入 · Ctrl+Enter 换行".into(),
             find_open: false,
             find_query: String::new(),
             replace_with: String::new(),
@@ -71,11 +91,14 @@ fn main() {\n\
 
     fn apply_theme(&self, ctx: &egui::Context) {
         let mut style = (*ctx.style()).clone();
-        style.visuals = if self.dark {
-            egui::Visuals::dark()
+        if self.dark {
+            style.visuals = egui::Visuals::dark();
+            style.visuals.window_fill = PANEL;
+            style.visuals.panel_fill = BG;
+            style.visuals.extreme_bg_color = PANEL2;
         } else {
-            egui::Visuals::light()
-        };
+            style.visuals = egui::Visuals::light();
+        }
         ctx.set_style(style);
     }
 
@@ -99,7 +122,7 @@ fn main() {\n\
         self.last_render = n;
         self.need_refresh = false;
         if !self.quit_confirm {
-            self.status = format!("blocks: {r} reused / {n} rendered");
+            self.status = format!("blocks: {r} reused / {n} rendered · Ctrl+Enter 换行");
         }
     }
 
@@ -111,7 +134,7 @@ fn main() {\n\
             }
             self.dirty = false;
             self.quit_confirm = false;
-            self.status = format!("Saved: {}", path.display());
+            self.status = format!("已保存: {}", path.display());
         } else {
             self.save_as();
         }
@@ -129,7 +152,7 @@ fn main() {\n\
             self.path = Some(path.clone());
             self.dirty = false;
             self.quit_confirm = false;
-            self.status = format!("Saved: {}", path.display());
+            self.status = format!("已保存: {}", path.display());
         }
     }
 
@@ -145,7 +168,7 @@ fn main() {\n\
                     self.dirty = false;
                     self.quit_confirm = false;
                     self.need_refresh = true;
-                    self.status = "Opened".into();
+                    self.status = "已打开".into();
                 }
                 Err(e) => self.status = format!("Open error: {e}"),
             }
@@ -157,22 +180,22 @@ fn main() {\n\
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         } else {
             self.quit_confirm = true;
-            self.status = "Unsaved — quit again to discard, or Ctrl+S to save".into();
+            self.status = "有未保存更改 — 再按一次退出丢弃，或 Ctrl+S 保存".into();
         }
     }
 
     fn find_next(&mut self) {
         let q = self.find_query.to_lowercase();
         if q.is_empty() {
-            self.status = "Find: empty query".into();
+            self.status = "查找：查询为空".into();
             return;
         }
         let lower = self.source.to_lowercase();
         if let Some(idx) = lower.find(&q) {
             let line = self.source[..idx].bytes().filter(|&b| b == b'\n').count() + 1;
-            self.status = format!("Found near line {line} (byte {idx})");
+            self.status = format!("找到 · 约第 {line} 行");
         } else {
-            self.status = "No match".into();
+            self.status = "未找到".into();
         }
     }
 
@@ -198,7 +221,15 @@ fn main() {\n\
         self.dirty = true;
         self.need_refresh = true;
         self.last_edit = Instant::now();
-        self.status = format!("Replaced {n}");
+        self.status = format!("已替换 {n} 处");
+    }
+
+    fn panel_frame() -> Frame {
+        Frame::new()
+            .fill(PANEL)
+            .stroke(Stroke::new(1.0, BORDER))
+            .corner_radius(CornerRadius::same(10))
+            .inner_margin(Margin::same(12))
     }
 }
 
@@ -210,176 +241,260 @@ impl eframe::App for MdEditorApp {
 
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.file_title()));
 
-        egui::TopBottomPanel::top("menu").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("Open…    Ctrl+O").clicked() {
-                        self.open_file();
-                        ui.close_menu();
-                    }
-                    if ui.button("Save     Ctrl+S").clicked() {
-                        self.save();
-                        ui.close_menu();
-                    }
-                    if ui.button("Save As…").clicked() {
-                        self.save_as();
-                        ui.close_menu();
-                    }
+        // Top bar
+        egui::TopBottomPanel::top("menu")
+            .frame(
+                Frame::new()
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0, BORDER))
+                    .inner_margin(Margin::symmetric(12, 6)),
+            )
+            .show(ctx, |ui| {
+                egui::menu::bar(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 12.0;
+                    ui.menu_button(RichText::new("文件").color(TEXT), |ui| {
+                        if ui.button("打开…    Ctrl+O").clicked() {
+                            self.open_file();
+                            ui.close_menu();
+                        }
+                        if ui.button("保存      Ctrl+S").clicked() {
+                            self.save();
+                            ui.close_menu();
+                        }
+                        if ui.button("另存为…").clicked() {
+                            self.save_as();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("退出").clicked() {
+                            self.request_quit(ctx);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button(RichText::new("编辑").color(TEXT), |ui| {
+                        if ui.button("查找 / 替换    Ctrl+F").clicked() {
+                            self.find_open = true;
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button(RichText::new("视图").color(TEXT), |ui| {
+                        ui.add(
+                            egui::Slider::new(&mut self.split, 0.25..=0.75).text("分栏比例"),
+                        );
+                        if ui
+                            .button(if self.dark {
+                                "浅色主题"
+                            } else {
+                                "深色主题"
+                            })
+                            .clicked()
+                        {
+                            self.dark = !self.dark;
+                            self.apply_theme(ctx);
+                            ui.close_menu();
+                        }
+                    });
                     ui.separator();
-                    if ui.button("Quit").clicked() {
-                        self.request_quit(ctx);
-                        ui.close_menu();
+                    if self.dirty {
+                        ui.label(RichText::new("● 未保存").color(WARN).small());
+                    } else {
+                        ui.label(RichText::new("○ 已保存").color(MUTED).small());
                     }
-                });
-                ui.menu_button("Edit", |ui| {
-                    if ui.button("Find / Replace    Ctrl+F").clicked() {
-                        self.find_open = true;
-                        ui.close_menu();
-                    }
-                });
-                ui.menu_button("View", |ui| {
-                    ui.add(egui::Slider::new(&mut self.split, 0.2..=0.8).text("Split"));
-                    if ui
-                        .button(if self.dark {
-                            "Light theme"
-                        } else {
-                            "Dark theme"
-                        })
-                        .clicked()
-                    {
-                        self.dark = !self.dark;
-                        self.apply_theme(ctx);
-                        ui.close_menu();
-                    }
-                });
-                ui.separator();
-                ui.label(if self.dirty {
-                    egui::RichText::new("● modified").color(egui::Color32::YELLOW)
-                } else {
-                    egui::RichText::new("○ saved").color(egui::Color32::GRAY)
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new("Enter 确认输入 · Ctrl+Enter 换行")
+                                .small()
+                                .color(MUTED),
+                        );
+                    });
                 });
             });
-        });
 
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(&self.status);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!(
-                        "{} chars · {} lines",
-                        self.source.len(),
-                        self.source.lines().count().max(1)
-                    ));
+        // Status
+        egui::TopBottomPanel::bottom("status")
+            .frame(
+                Frame::new()
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0, BORDER))
+                    .inner_margin(Margin::symmetric(12, 6)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&self.status).color(TEXT).small());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(format!(
+                                "{} 字 · {} 行",
+                                self.source.chars().count(),
+                                self.source.lines().count().max(1)
+                            ))
+                            .small()
+                            .color(MUTED),
+                        );
+                    });
                 });
             });
-        });
 
         if self.find_open {
-            egui::Window::new("Find / Replace")
+            egui::Window::new("查找 / 替换")
                 .collapsible(false)
                 .resizable(false)
+                .frame(Self::panel_frame())
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Find:");
-                        ui.text_edit_singleline(&mut self.find_query);
+                        ui.label("查找");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.find_query)
+                                .desired_width(220.0),
+                        );
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Replace:");
-                        ui.text_edit_singleline(&mut self.replace_with);
+                        ui.label("替换");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.replace_with)
+                                .desired_width(220.0),
+                        );
                     });
                     ui.horizontal(|ui| {
-                        if ui.button("Find").clicked() {
+                        if ui.button("查找下一处").clicked() {
                             self.find_next();
                         }
-                        if ui.button("Replace all").clicked() {
+                        if ui.button("全部替换").clicked() {
                             self.replace_all();
                         }
-                        if ui.button("Close").clicked() {
+                        if ui.button("关闭").clicked() {
                             self.find_open = false;
                         }
                     });
                 });
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let full = ui.available_width();
-            let left_w = full * self.split;
+        egui::CentralPanel::default()
+            .frame(Frame::new().fill(BG).inner_margin(Margin::same(10)))
+            .show(ctx, |ui| {
+                let full = ui.available_width();
+                let gap = 10.0;
+                let left_w = (full - gap) * self.split;
+                let right_w = full - gap - left_w;
+                let h = ui.available_height();
 
-            ui.horizontal(|ui| {
-                ui.allocate_ui(egui::vec2(left_w - 4.0, ui.available_height()), |ui| {
-                    ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("Source").strong());
-                        egui::ScrollArea::both()
-                            .id_salt("editor_scroll")
-                            .show(ui, |ui| {
-                                let response = ui.add(
-                                    egui::TextEdit::multiline(&mut self.source)
-                                        .code_editor()
-                                        .desired_width(f32::INFINITY)
-                                        .desired_rows(40),
+                ui.horizontal(|ui| {
+                    // Editor card
+                    ui.allocate_ui(Vec2::new(left_w, h), |ui| {
+                        Self::panel_frame().show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new("源码")
+                                        .strong()
+                                        .color(ACCENT)
+                                        .size(15.0),
                                 );
-                                if response.changed() {
-                                    self.dirty = true;
-                                    self.quit_confirm = false;
-                                    self.need_refresh = true;
-                                    self.last_edit = Instant::now();
-                                }
+                                ui.label(
+                                    RichText::new("Markdown")
+                                        .small()
+                                        .color(MUTED),
+                                );
                             });
+                            ui.add_space(6.0);
+                            ui.separator();
+                            ui.add_space(4.0);
+                            egui::ScrollArea::both()
+                                .id_salt("editor_scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    // Enter = IME confirm only; newline only via Ctrl+Enter
+                                    let te = egui::TextEdit::multiline(&mut self.source)
+                                        .code_editor()
+                                        .frame(false)
+                                        .desired_width(f32::INFINITY)
+                                        .desired_rows(32)
+                                        .text_color(TEXT)
+                                        .return_key(Some(egui::KeyboardShortcut::new(
+                                            egui::Modifiers::CTRL,
+                                            egui::Key::Enter,
+                                        )));
+                                    let response = ui.add(te);
+                                    if response.changed() {
+                                        self.dirty = true;
+                                        self.quit_confirm = false;
+                                        self.need_refresh = true;
+                                        self.last_edit = Instant::now();
+                                    }
+                                });
+                        });
                     });
-                });
 
-                ui.separator();
+                    ui.add_space(gap);
 
-                ui.allocate_ui(egui::vec2(full - left_w - 4.0, ui.available_height()), |ui| {
-                    ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "Preview ({} blocks · {} reused)",
-                                self.preview.blocks.len(),
-                                self.last_reuse
-                            ))
-                            .strong(),
-                        );
-                        egui::ScrollArea::vertical()
-                            .id_salt("preview_scroll")
-                            .show(ui, |ui| {
-                                for line in self.preview.all_lines() {
-                                    let rich = match line.kind {
-                                        LineKind::Heading(1) => egui::RichText::new(&line.text)
-                                            .size(26.0)
-                                            .strong()
-                                            .color(egui::Color32::from_rgb(200, 160, 255)),
-                                        LineKind::Heading(2) => egui::RichText::new(&line.text)
-                                            .size(22.0)
-                                            .strong()
-                                            .color(egui::Color32::from_rgb(140, 180, 255)),
-                                        LineKind::Heading(_) => egui::RichText::new(&line.text)
-                                            .size(18.0)
-                                            .strong()
-                                            .color(egui::Color32::from_rgb(120, 220, 220)),
-                                        LineKind::Code => egui::RichText::new(&line.text)
-                                            .monospace()
-                                            .color(egui::Color32::from_rgb(180, 230, 180)),
-                                        LineKind::Quote => {
-                                            egui::RichText::new(format!("│ {}", line.text))
-                                                .italics()
-                                                .color(egui::Color32::from_rgb(140, 200, 140))
-                                        }
-                                        LineKind::Table => egui::RichText::new(&line.text)
-                                            .monospace()
-                                            .color(egui::Color32::LIGHT_BLUE),
-                                        LineKind::Meta => egui::RichText::new(&line.text)
-                                            .small()
-                                            .color(egui::Color32::GRAY),
-                                        LineKind::Normal => egui::RichText::new(&line.text),
-                                    };
-                                    ui.label(rich);
-                                }
+                    // Preview card
+                    ui.allocate_ui(Vec2::new(right_w, h), |ui| {
+                        Self::panel_frame().show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new("预览")
+                                        .strong()
+                                        .color(OK)
+                                        .size(15.0),
+                                );
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{} blocks · {} reused",
+                                        self.preview.blocks.len(),
+                                        self.last_reuse
+                                    ))
+                                    .small()
+                                    .color(MUTED),
+                                );
                             });
+                            ui.add_space(6.0);
+                            ui.separator();
+                            ui.add_space(4.0);
+                            egui::ScrollArea::vertical()
+                                .id_salt("preview_scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.spacing_mut().item_spacing.y = 4.0;
+                                    for line in self.preview.all_lines() {
+                                        let rich = match line.kind {
+                                            LineKind::Heading(1) => RichText::new(&line.text)
+                                                .size(26.0)
+                                                .strong()
+                                                .color(Color32::from_rgb(210, 175, 255)),
+                                            LineKind::Heading(2) => RichText::new(&line.text)
+                                                .size(22.0)
+                                                .strong()
+                                                .color(Color32::from_rgb(150, 190, 255)),
+                                            LineKind::Heading(_) => RichText::new(&line.text)
+                                                .size(18.0)
+                                                .strong()
+                                                .color(Color32::from_rgb(130, 220, 220)),
+                                            LineKind::Code => RichText::new(&line.text)
+                                                .monospace()
+                                                .size(13.5)
+                                                .color(Color32::from_rgb(170, 230, 180)),
+                                            LineKind::Quote => RichText::new(format!(
+                                                "│ {}",
+                                                line.text
+                                            ))
+                                            .italics()
+                                            .color(Color32::from_rgb(150, 210, 160)),
+                                            LineKind::Table => RichText::new(&line.text)
+                                                .monospace()
+                                                .color(Color32::from_rgb(160, 200, 255)),
+                                            LineKind::Meta => RichText::new(&line.text)
+                                                .small()
+                                                .color(MUTED),
+                                            LineKind::Normal => {
+                                                RichText::new(&line.text).color(TEXT).size(14.5)
+                                            }
+                                        };
+                                        ui.label(rich);
+                                    }
+                                });
+                        });
                     });
                 });
             });
-        });
 
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
             self.save();
