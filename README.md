@@ -22,7 +22,27 @@
 
 - **增量解析**：按 block 哈希缓存，只重渲染变化块；未闭合 fence 显示 `streaming…`
 - **语法高亮**：syntect（源码轻量着色 + 预览 code fence 完整高亮）
-- **滚动同步 + 鼠标**：Tab 切换焦点，滚轮同步，点击定位光标
+- **滚动同步 + 鼠标**：比例同步，滚轮/点击
+- **UTF-8 安全光标**：中文等不会 panic
+- **脏退出确认**：未保存时 Ctrl+Q 需按两次
+
+## 快捷键
+
+| 按键 | 功能 |
+|------|------|
+| `Ctrl+S` | 保存 |
+| `Ctrl+Q` / `Ctrl+C` | 退出（有未保存改动时需确认） |
+| `Ctrl+H` / `?` | 帮助 |
+| `Tab` | 切换焦点 |
+| `Home` / `End` | 行首 / 行尾 |
+| `Ctrl+←` / `Ctrl+→` | 按词移动 |
+| `Shift+S`（预览焦点） | 开关滚动同步 |
+| 方向键 / 鼠标 | 移动与滚动 |
+
+## 文档
+
+- [PRD.md](./PRD.md) — 产品需求与版本循环
+- [Agent.md](./Agent.md) — Agent 约束（轻量、CI 发版）
 
 ## 本地开发（仅 check / run）
 
@@ -31,26 +51,13 @@ cargo check
 cargo run -- README.md
 ```
 
-正式二进制由 **GitHub Actions** 在 tag `v*` 或手动 workflow 时编译并发布。规范见 [Agent.md](./Agent.md)。
-
-## 快捷键
-
-| 按键 | 功能 |
-|------|------|
-| `Ctrl+S` | 保存 |
-| `Ctrl+Q` / `Ctrl+C` | 退出 |
-| `Ctrl+H` / `?` | 帮助 |
-| `Tab` | 切换焦点 |
-| `Shift+S`（预览焦点） | 开关滚动同步 |
-| 方向键 / 鼠标 | 移动与滚动 |
+正式二进制由 **GitHub Actions** 在 tag `v*` 或手动 workflow 时编译并发布。
 
 ## 发版
 
 ```bash
-# 改 Cargo.toml version 后
-git tag v0.2.0
-git push origin v0.2.0
-# CI 自动 multi-platform build → GitHub Release
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 或在 Actions 中 `workflow_dispatch` 填写版本号。
