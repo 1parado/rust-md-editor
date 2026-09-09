@@ -1,4 +1,4 @@
-//! Text buffer with cursor
+//! Text buffer with cursor (byte-index, char-boundary safe)
 pub struct Buffer {
     pub lines: Vec<String>,
     pub cursor_row: usize,
@@ -25,16 +25,31 @@ impl Buffer {
         self.lines.join("\n")
     }
 
-    pub fn insert_char(&mut self, c: char) {
-        let line = &mut self.lines[self.cursor_row];
-        if self.cursor_col > line.len() {
-            self.cursor_col = line.len();
+    pub fn line_count(&self) -> usize {
+        self.lines.len()
+    }
+
+    fn clamp_col(&mut self) {
+        let len = self.lines[self.cursor_row].len();
+        if self.cursor_col > len {
+            self.cursor_col = len;
+        } else if !self.lines[self.cursor_row].is_char_boundary(self.cursor_col) {
+            let line = &self.lines[self.cursor_row];
+            while self.cursor_col > 0 && !line.is_char_boundary(self.cursor_col) {
+                self.cursor_col -= 1;
+            }
         }
+    }
+
+    pub fn insert_char(&mut self, c: char) {
+        self.clamp_col();
+        let line = &mut self.lines[self.cursor_row];
         line.insert(self.cursor_col, c);
         self.cursor_col += c.len_utf8();
     }
 
     pub fn insert_newline(&mut self) {
+        self.clamp_col();
         let line = &mut self.lines[self.cursor_row];
         let rest = line.split_off(self.cursor_col);
         self.cursor_row += 1;
@@ -104,21 +119,69 @@ impl Buffer {
     pub fn move_up(&mut self) {
         if self.cursor_row > 0 {
             self.cursor_row -= 1;
-            let len = self.lines[self.cursor_row].len();
-            if self.cursor_col > len {
-                self.cursor_col = len;
-            }
+            self.clamp_col();
         }
     }
 
     pub fn move_down(&mut self) {
         if self.cursor_row + 1 < self.lines.len() {
             self.cursor_row += 1;
-            let len = self.lines[self.cursor_row].len();
-            if self.cursor_col > len {
-                self.cursor_col = len;
-            }
+            self.clamp_col();
         }
+    }
+
+    pub fn home(&mut self) {
+        self.cursor_col = 0;
+    }
+
+    pub fn end(&mut self) {
+        self.cursor_col = self.lines[self.cursor_row].len();
+    }
+
+    pub fn move_word_left(&mut self) {
+        if self.cursor_col == 0 {
+            if self.cursor_row > 0 {
+                self.cursor_row -= 1;
+                self.cursor_col = self.lines[self.cursor_row].len();
+            }
+            return;
+        }
+        let line = &self.lines[self.cursor_row];
+        let bytes = line.as_bytes();
+        let mut i = self.cursor_col;
+        while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
+        while i > 0 && !bytes[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
+        while i > 0 && !line.is_char_boundary(i) {
+            i -= 1;
+        }
+        self.cursor_col = i;
+    }
+
+    pub fn move_word_right(&mut self) {
+        let line = &self.lines[self.cursor_row];
+        if self.cursor_col >= line.len() {
+            if self.cursor_row + 1 < self.lines.len() {
+                self.cursor_row += 1;
+                self.cursor_col = 0;
+            }
+            return;
+        }
+        let bytes = line.as_bytes();
+        let mut i = self.cursor_col;
+        while i < line.len() && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        while i < line.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        while i < line.len() && !line.is_char_boundary(i) {
+            i += 1;
+        }
+        self.cursor_col = i;
     }
 
     pub fn ensure_visible(&mut self, height: usize) {

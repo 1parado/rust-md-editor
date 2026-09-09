@@ -13,6 +13,8 @@ pub struct App {
     pub dirty: bool,
     pub status: String,
     pub show_help: bool,
+    /// When dirty, first Ctrl+Q sets this; second quits
+    pub quit_confirm: bool,
     pub highlighter: Highlighter,
     pub preview: PreviewCache,
     pub preview_scroll: usize,
@@ -44,10 +46,7 @@ impl App {
                      }\n\
                      ```\n\n\
                      > 未闭合的代码块会显示 *streaming…*\n\n\
-                     试试继续输入一个未闭合的 fence：\n\n\
-                     ```python\n\
-                     def hello():\n\
-                         print(\"still streaming\")\n",
+                     试试继续输入中文或未闭合 fence。\n",
                 ),
                 None,
             )
@@ -59,6 +58,7 @@ impl App {
             dirty: false,
             status: "Ready · Ctrl+S save · Ctrl+Q quit · ? help · Tab focus".into(),
             show_help: false,
+            quit_confirm: false,
             highlighter: Highlighter::new(),
             preview: PreviewCache::new(),
             preview_scroll: 0,
@@ -81,25 +81,29 @@ impl App {
         self.last_render = rendered;
         self.preview_lines = self.preview.all_lines();
         self.need_preview_refresh = false;
-        self.status = format!(
-            "blocks: {} reused / {} rendered · sync:{} · focus:{}",
-            reused,
-            rendered,
-            if self.scroll_sync { "ON" } else { "OFF" },
-            if self.focus == 0 { "edit" } else { "preview" }
-        );
+        if !self.quit_confirm {
+            self.status = format!(
+                "blocks: {} reused / {} rendered · sync:{} · focus:{}",
+                reused,
+                rendered,
+                if self.scroll_sync { "ON" } else { "OFF" },
+                if self.focus == 0 { "edit" } else { "preview" }
+            );
+        }
     }
 
     pub fn save(&mut self) -> Result<()> {
         if let Some(ref path) = self.path {
             fs::write(path, self.buffer.content())?;
             self.dirty = false;
+            self.quit_confirm = false;
             self.status = format!("Saved: {}", path.display());
         } else {
             let default = PathBuf::from("untitled.md");
             fs::write(&default, self.buffer.content())?;
             self.path = Some(default.clone());
             self.dirty = false;
+            self.quit_confirm = false;
             self.status = format!("Saved: {}", default.display());
         }
         Ok(())
@@ -107,6 +111,36 @@ impl App {
 
     pub fn on_edit(&mut self) {
         self.dirty = true;
+        self.quit_confirm = false;
         self.need_preview_refresh = true;
+    }
+
+    /// Returns true if the app should exit.
+    pub fn request_quit(&mut self) -> bool {
+        if !self.dirty || self.quit_confirm {
+            return true;
+        }
+        self.quit_confirm = true;
+        self.status = "Unsaved changes — Ctrl+Q again to quit, Ctrl+S to save".into();
+        false
+    }
+
+    /// Map editor scroll position to preview (proportional).
+    pub fn sync_preview_from_editor(&mut self) {
+        if !self.scroll_sync {
+            return;
+        }
+        let elen = self.buffer.line_count().max(1);
+        let plen = self.preview_lines.len().max(1);
+        self.preview_scroll = (self.buffer.scroll * plen) / elen;
+    }
+
+    pub fn sync_editor_from_preview(&mut self) {
+        if !self.scroll_sync {
+            return;
+        }
+        let elen = self.buffer.line_count().max(1);
+        let plen = self.preview_lines.len().max(1);
+        self.buffer.scroll = (self.preview_scroll * elen) / plen;
     }
 }
