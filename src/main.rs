@@ -5,7 +5,8 @@ mod buffer;
 mod highlight;
 mod preview;
 mod app;
-mod ui;
+mod draw;
+mod events;
 
 use anyhow::Result;
 use crossterm::{
@@ -29,7 +30,7 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let res = ui::run_app(&mut terminal, app);
+    let res = events::run_app(&mut terminal, app);
 
     disable_raw_mode()?;
     execute!(
