@@ -32,32 +32,74 @@ pub fn run_app(
                         continue;
                     }
 
-                    // ---- Find mode ----
-                    if app.finding {
+                    // ---- Goto mode ----
+                    if app.goto_mode {
                         match (key.code, key.modifiers) {
-                            (KeyCode::Esc, _) => app.stop_find(),
-                            (KeyCode::Enter, _) => app.find_next(true),
-                            (KeyCode::Char('n'), KeyModifiers::NONE) => app.find_next(true),
-                            (KeyCode::Char('N'), KeyModifiers::SHIFT) => app.find_next(false),
+                            (KeyCode::Esc, _) => {
+                                app.goto_mode = false;
+                                app.status = "Goto cancelled".into();
+                            }
+                            (KeyCode::Enter, _) => app.apply_goto(),
                             (KeyCode::Backspace, _) => {
-                                app.find_query.pop();
-                                app.status = format!(
-                                    "Find: {}_  (Enter/n next · N prev · Esc)",
-                                    app.find_query
-                                );
+                                app.goto_input.pop();
+                                app.status = format!("Goto line: {}_", app.goto_input);
                             }
-                            (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
-                                app.find_query.push(c);
-                                app.status = format!(
-                                    "Find: {}_  (Enter/n next · N prev · Esc)",
-                                    app.find_query
-                                );
-                            }
-                            (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
-                                // keep open, re-run
-                                app.find_next(true);
+                            (KeyCode::Char(c), _) if c.is_ascii_digit() => {
+                                app.goto_input.push(c);
+                                app.status = format!("Goto line: {}_", app.goto_input);
                             }
                             _ => {}
+                        }
+                        continue;
+                    }
+
+                    // ---- Find / Replace mode ----
+                    if app.finding {
+                        if app.replacing {
+                            match (key.code, key.modifiers) {
+                                (KeyCode::Esc, _) => app.stop_find(),
+                                (KeyCode::Enter, _) => app.replace_one(),
+                                (KeyCode::Char('a'), KeyModifiers::NONE) => app.replace_all(),
+                                (KeyCode::Backspace, _) => {
+                                    app.replace_with.pop();
+                                    app.status = format!(
+                                        "Replace '{}' → {}_  (Enter=one · a=all · Esc)",
+                                        app.find_query, app.replace_with
+                                    );
+                                }
+                                (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                                    app.replace_with.push(c);
+                                    app.status = format!(
+                                        "Replace '{}' → {}_  (Enter=one · a=all · Esc)",
+                                        app.find_query, app.replace_with
+                                    );
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            match (key.code, key.modifiers) {
+                                (KeyCode::Esc, _) => app.stop_find(),
+                                (KeyCode::Enter, _) => app.find_next(true),
+                                (KeyCode::Char('n'), KeyModifiers::NONE) => app.find_next(true),
+                                (KeyCode::Char('N'), KeyModifiers::SHIFT) => app.find_next(false),
+                                (KeyCode::Char('r'), KeyModifiers::CONTROL) => app.start_replace(),
+                                (KeyCode::Backspace, _) => {
+                                    app.find_query.pop();
+                                    app.status = format!(
+                                        "Find: {}_  (Enter/n · N · Ctrl+R · Esc)",
+                                        app.find_query
+                                    );
+                                }
+                                (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                                    app.find_query.push(c);
+                                    app.status = format!(
+                                        "Find: {}_  (Enter/n · N · Ctrl+R · Esc)",
+                                        app.find_query
+                                    );
+                                }
+                                (KeyCode::Char('f'), KeyModifiers::CONTROL) => app.find_next(true),
+                                _ => {}
+                            }
                         }
                         continue;
                     }
@@ -74,9 +116,12 @@ pub fn run_app(
                                 app.status = format!("Save error: {}", e);
                             }
                         }
-                        (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
+                        (KeyCode::Char('f'), KeyModifiers::CONTROL) => app.start_find(),
+                        (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
                             app.start_find();
+                            app.start_replace();
                         }
+                        (KeyCode::Char('g'), KeyModifiers::CONTROL) => app.start_goto(),
                         (KeyCode::Char('h'), KeyModifiers::CONTROL)
                         | (KeyCode::Char('?'), _) => {
                             app.show_help = true;
@@ -159,7 +204,7 @@ pub fn run_app(
                     }
                 }
                 Event::Mouse(me) => {
-                    if app.finding {
+                    if app.finding || app.goto_mode {
                         continue;
                     }
                     let size = terminal.size()?;
