@@ -1,5 +1,6 @@
 //! CJK fonts — system TTF/TTC with face index (no extra crates).
 use eframe::egui;
+use std::path::PathBuf;
 
 pub fn install_cjk_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -14,7 +15,6 @@ pub fn install_cjk_fonts(ctx: &egui::Context) {
         let mut fd = egui::FontData::from_owned(data);
         fd.index = index;
         fonts.font_data.insert("cjk".to_owned(), fd);
-        // Highest priority for both families so Chinese always has a glyph
         for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
             let entry = fonts.families.entry(family).or_default();
             entry.retain(|n| n != "cjk");
@@ -27,21 +27,22 @@ pub fn install_cjk_fonts(ctx: &egui::Context) {
     eprintln!("warning: no CJK font — install Microsoft YaHei / Noto Sans CJK");
 }
 
-fn cjk_candidates() -> Vec<(std::path::PathBuf, u32)> {
+fn cjk_candidates() -> Vec<(PathBuf, u32)> {
     let mut v = Vec::new();
     #[cfg(target_os = "windows")]
     {
         let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+        let base = PathBuf::from(windir);
         for (rel, idx) in [
-            (r"Fonts\msyh.ttf", 0u32),
-            (r"Fonts\simhei.ttf", 0),
-            (r"Fonts\simkai.ttf", 0),
-            (r"Fonts\msyh.ttc", 0),
-            (r"Fonts\msyhbd.ttc", 0),
-            (r"Fonts\simsun.ttc", 0),
-            (r"Fonts\msjhl.ttc", 0),
+            ("Fonts/msyh.ttf", 0u32),
+            ("Fonts/simhei.ttf", 0),
+            ("Fonts/simkai.ttf", 0),
+            ("Fonts/msyh.ttc", 0),
+            ("Fonts/msyhbd.ttc", 0),
+            ("Fonts/simsun.ttc", 0),
+            ("Fonts/msjhl.ttc", 0),
         ] {
-            v.push((std::path::PathBuf::from(format!("{windir}\{rel}")), idx));
+            v.push((base.join(rel), idx));
         }
     }
     #[cfg(target_os = "macos")]
@@ -54,7 +55,7 @@ fn cjk_candidates() -> Vec<(std::path::PathBuf, u32)> {
             ("/System/Library/Fonts/Supplemental/Songti.ttc", 0),
             ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
         ] {
-            v.push((std::path::PathBuf::from(p), idx));
+            v.push((PathBuf::from(p), idx));
         }
     }
     #[cfg(target_os = "linux")]
@@ -77,7 +78,7 @@ fn cjk_candidates() -> Vec<(std::path::PathBuf, u32)> {
             ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 0),
             ("/usr/share/fonts/truetype/arphic/uming.ttc", 0),
         ] {
-            v.push((std::path::PathBuf::from(p), idx));
+            v.push((PathBuf::from(p), idx));
         }
     }
     v
