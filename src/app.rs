@@ -1,11 +1,10 @@
 //! Desktop app state + egui UI
 use crate::preview::{LineKind, PreviewCache};
 use eframe::egui;
-use egui::{Color32, CornerRadius, Frame, Margin, RichText, Stroke, Vec2};
+use egui::{Color32, Frame, Margin, RichText, Rounding, Stroke, Vec2};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-// —— palette ——
 const BG: Color32 = Color32::from_rgb(22, 24, 28);
 const PANEL: Color32 = Color32::from_rgb(30, 33, 39);
 const PANEL2: Color32 = Color32::from_rgb(36, 40, 48);
@@ -45,7 +44,7 @@ impl MdEditorApp {
         style.visuals.widgets.inactive.bg_fill = PANEL2;
         style.visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(88, 166, 255, 60);
         style.spacing.item_spacing = Vec2::new(8.0, 6.0);
-        style.spacing.window_margin = Margin::same(12);
+        style.spacing.window_margin = Margin::same(12.0);
         cc.egui_ctx.set_style(style);
 
         let (source, path) = if let Some(p) = path {
@@ -225,11 +224,11 @@ fn main() {\n\
     }
 
     fn panel_frame() -> Frame {
-        Frame::new()
+        Frame::none()
             .fill(PANEL)
             .stroke(Stroke::new(1.0, BORDER))
-            .corner_radius(CornerRadius::same(10))
-            .inner_margin(Margin::same(12))
+            .rounding(Rounding::same(10.0))
+            .inner_margin(Margin::same(12.0))
     }
 }
 
@@ -241,13 +240,12 @@ impl eframe::App for MdEditorApp {
 
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.file_title()));
 
-        // Top bar
         egui::TopBottomPanel::top("menu")
             .frame(
-                Frame::new()
+                Frame::none()
                     .fill(PANEL)
                     .stroke(Stroke::new(1.0, BORDER))
-                    .inner_margin(Margin::symmetric(12, 6)),
+                    .inner_margin(Margin::symmetric(12.0, 6.0)),
             )
             .show(ctx, |ui| {
                 egui::menu::bar(ui, |ui| {
@@ -278,9 +276,7 @@ impl eframe::App for MdEditorApp {
                         }
                     });
                     ui.menu_button(RichText::new("视图").color(TEXT), |ui| {
-                        ui.add(
-                            egui::Slider::new(&mut self.split, 0.25..=0.75).text("分栏比例"),
-                        );
+                        ui.add(egui::Slider::new(&mut self.split, 0.25..=0.75).text("分栏比例"));
                         if ui
                             .button(if self.dark {
                                 "浅色主题"
@@ -310,13 +306,12 @@ impl eframe::App for MdEditorApp {
                 });
             });
 
-        // Status
         egui::TopBottomPanel::bottom("status")
             .frame(
-                Frame::new()
+                Frame::none()
                     .fill(PANEL)
                     .stroke(Stroke::new(1.0, BORDER))
-                    .inner_margin(Margin::symmetric(12, 6)),
+                    .inner_margin(Margin::symmetric(12.0, 6.0)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -344,15 +339,13 @@ impl eframe::App for MdEditorApp {
                     ui.horizontal(|ui| {
                         ui.label("查找");
                         ui.add(
-                            egui::TextEdit::singleline(&mut self.find_query)
-                                .desired_width(220.0),
+                            egui::TextEdit::singleline(&mut self.find_query).desired_width(220.0),
                         );
                     });
                     ui.horizontal(|ui| {
                         ui.label("替换");
                         ui.add(
-                            egui::TextEdit::singleline(&mut self.replace_with)
-                                .desired_width(220.0),
+                            egui::TextEdit::singleline(&mut self.replace_with).desired_width(220.0),
                         );
                     });
                     ui.horizontal(|ui| {
@@ -370,7 +363,7 @@ impl eframe::App for MdEditorApp {
         }
 
         egui::CentralPanel::default()
-            .frame(Frame::new().fill(BG).inner_margin(Margin::same(10)))
+            .frame(Frame::none().fill(BG).inner_margin(Margin::same(10.0)))
             .show(ctx, |ui| {
                 let full = ui.available_width();
                 let gap = 10.0;
@@ -379,21 +372,13 @@ impl eframe::App for MdEditorApp {
                 let h = ui.available_height();
 
                 ui.horizontal(|ui| {
-                    // Editor card
                     ui.allocate_ui(Vec2::new(left_w, h), |ui| {
                         Self::panel_frame().show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    RichText::new("源码")
-                                        .strong()
-                                        .color(ACCENT)
-                                        .size(15.0),
+                                    RichText::new("源码").strong().color(ACCENT).size(15.0),
                                 );
-                                ui.label(
-                                    RichText::new("Markdown")
-                                        .small()
-                                        .color(MUTED),
-                                );
+                                ui.label(RichText::new("Markdown").small().color(MUTED));
                             });
                             ui.add_space(6.0);
                             ui.separator();
@@ -402,7 +387,6 @@ impl eframe::App for MdEditorApp {
                                 .id_salt("editor_scroll")
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                                    // Enter = IME confirm only; newline only via Ctrl+Enter
                                     let te = egui::TextEdit::multiline(&mut self.source)
                                         .code_editor()
                                         .frame(false)
@@ -426,16 +410,10 @@ impl eframe::App for MdEditorApp {
 
                     ui.add_space(gap);
 
-                    // Preview card
                     ui.allocate_ui(Vec2::new(right_w, h), |ui| {
                         Self::panel_frame().show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new("预览")
-                                        .strong()
-                                        .color(OK)
-                                        .size(15.0),
-                                );
+                                ui.label(RichText::new("预览").strong().color(OK).size(15.0));
                                 ui.label(
                                     RichText::new(format!(
                                         "{} blocks · {} reused",
@@ -472,18 +450,17 @@ impl eframe::App for MdEditorApp {
                                                 .monospace()
                                                 .size(13.5)
                                                 .color(Color32::from_rgb(170, 230, 180)),
-                                            LineKind::Quote => RichText::new(format!(
-                                                "│ {}",
-                                                line.text
-                                            ))
-                                            .italics()
-                                            .color(Color32::from_rgb(150, 210, 160)),
+                                            LineKind::Quote => {
+                                                RichText::new(format!("│ {}", line.text))
+                                                    .italics()
+                                                    .color(Color32::from_rgb(150, 210, 160))
+                                            }
                                             LineKind::Table => RichText::new(&line.text)
                                                 .monospace()
                                                 .color(Color32::from_rgb(160, 200, 255)),
-                                            LineKind::Meta => RichText::new(&line.text)
-                                                .small()
-                                                .color(MUTED),
+                                            LineKind::Meta => {
+                                                RichText::new(&line.text).small().color(MUTED)
+                                            }
                                             LineKind::Normal => {
                                                 RichText::new(&line.text).color(TEXT).size(14.5)
                                             }
