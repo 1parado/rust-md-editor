@@ -8,9 +8,10 @@ use app::MdEditorApp;
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1120.0, 740.0])
-            .with_min_inner_size([720.0, 480.0])
-            .with_title("rust-md-editor"),
+            .with_inner_size([1180.0, 760.0])
+            .with_min_inner_size([760.0, 500.0])
+            .with_title("rust-md-editor")
+            .with_transparent(false),
         ..Default::default()
     };
 
