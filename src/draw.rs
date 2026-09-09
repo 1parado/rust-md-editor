@@ -6,6 +6,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
+/// Split `s` at byte index `col` on a char boundary (never panics).
+fn split_at_boundary(s: &str, col: usize) -> (&str, &str) {
+    let mut idx = col.min(s.len());
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    s.split_at(idx)
+}
+
 pub fn ui(f: &mut Frame, app: &mut App) {
     let size = f.area();
     let chunks = Layout::default()
@@ -40,8 +49,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             for sp in content_spans {
                 let len = sp.content.len();
                 if !found && col + len >= app.buffer.cursor_col {
-                    let rel = app.buffer.cursor_col - col;
-                    let (b, a) = sp.content.split_at(rel.min(sp.content.len()));
+                    let rel = app.buffer.cursor_col.saturating_sub(col);
+                    let (b, a) = split_at_boundary(&sp.content, rel);
                     if !b.is_empty() {
                         before.push(Span::styled(b.to_string(), sp.style));
                     }
@@ -75,7 +84,11 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     }
 
     let title = if app.dirty { " Source * " } else { " Source " };
-    let border_color = if app.focus == 0 { Color::Cyan } else { Color::DarkGray };
+    let border_color = if app.focus == 0 {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
     f.render_widget(
         Paragraph::new(source_lines)
             .block(
@@ -88,19 +101,29 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         editor_area,
     );
 
-    if app.need_preview_refresh {
-        app.refresh_preview();
-    }
+    // Preview is refreshed only in the event loop (debounce), not every frame.
     let preview_total = app.preview_lines.len();
-    let p_start = app.preview_scroll.min(preview_total.saturating_sub(1));
+    let p_start = if preview_total == 0 {
+        0
+    } else {
+        app.preview_scroll.min(preview_total.saturating_sub(1))
+    };
     let p_end = (p_start + preview_height).min(preview_total);
-    let visible: Vec<Line> = app.preview_lines[p_start..p_end].to_vec();
+    let visible: Vec<Line> = if p_start < p_end {
+        app.preview_lines[p_start..p_end].to_vec()
+    } else {
+        Vec::new()
+    };
     let preview_title = format!(
         " Preview ({} blocks, {} reused) ",
         app.preview.blocks.len(),
         app.last_reuse
     );
-    let p_border = if app.focus == 1 { Color::Green } else { Color::DarkGray };
+    let p_border = if app.focus == 1 {
+        Color::Green
+    } else {
+        Color::DarkGray
+    };
     f.render_widget(
         Paragraph::new(visible)
             .block(
@@ -133,13 +156,30 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     );
 
     if app.show_help {
-        let help_area = centered_rect(70, 70, size);
+        let help_area = centered_rect(70, 75, size);
         let help_text = vec![
-            Line::from(Span::styled(" Shortcuts ", Style::default().add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled(
+                " Shortcuts ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
             Line::from(""),
-            Line::from("  Ctrl+S / Ctrl+Q     Save / Quit"),
-            Line::from("  Tab                 Switch focus"),
-            Line::from("  Mouse wheel         Scroll"),
+            Line::from("  Ctrl+S / Ctrl+Q     Save / Quit (dirty: twice)"),
+            Line::from("  Ctrl+H / ?          Toggle help"),
+            Line::from("  Tab                 Switch focus (edit ↔ preview)"),
+            Line::from("  Home / End          Line start / end"),
+            Line::from("  Ctrl+← / Ctrl+→     Word left / right"),
+            Line::from("  Shift+S (preview)   Toggle scroll-sync"),
+            Line::from(""),
+            Line::from("  Mouse click / wheel  Focus, cursor, scroll"),
+            Line::from("  (sync ON → proportional scroll)"),
+            Line::from(""),
+            Line::from(Span::styled(
+                " Incremental preview ",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from("  Only changed blocks re-parse & re-highlight."),
+            Line::from("  Unclosed fences show \"streaming…\"."),
+            Line::from(""),
             Line::from("  Press any key to close"),
         ];
         f.render_widget(
