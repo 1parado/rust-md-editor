@@ -67,14 +67,8 @@ fn cjk_candidates() -> Vec<(PathBuf, u32)> {
             ),
             ("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", 0),
             ("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", 0),
-            (
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                0,
-            ),
-            (
-                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-                0,
-            ),
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
+            ("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", 0),
             ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 0),
             ("/usr/share/fonts/truetype/arphic/uming.ttc", 0),
         ] {

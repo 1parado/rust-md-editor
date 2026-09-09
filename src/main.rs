@@ -1,7 +1,7 @@
 //! rust-md-editor — desktop Markdown editor (egui)
+mod app;
 mod fonts;
 mod preview;
-mod app;
 
 use app::MdEditorApp;
 

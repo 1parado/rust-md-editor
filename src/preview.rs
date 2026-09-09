@@ -7,10 +7,18 @@ use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
+/// Colored text segment of a highlighted code line (RGB, no alpha).
+#[derive(Clone, Debug)]
+pub struct CodeSpan {
+    pub text: String,
+    pub color: [u8; 3],
+}
+
 #[derive(Clone, Debug)]
 pub struct MdBlock {
     pub source: String,
     pub id: String,
+    pub theme: String,
     pub lines: Vec<PreviewLine>,
     pub incomplete: bool,
 }
@@ -19,6 +27,18 @@ pub struct MdBlock {
 pub struct PreviewLine {
     pub text: String,
     pub kind: LineKind,
+    /// Only populated for `LineKind::Code`.
+    pub spans: Vec<CodeSpan>,
+}
+
+impl PreviewLine {
+    fn plain(text: impl Into<String>, kind: LineKind) -> Self {
+        Self {
+            text: text.into(),
+            kind,
+            spans: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,28 +135,48 @@ impl Highlighter {
         }
     }
 
-    pub fn highlight_code_plain(&self, code: &str, lang: &str) -> Vec<String> {
+    /// Highlight `code` in `lang`, returning colored spans per line.
+    /// Falls back to the dark base16 theme when `theme_name` is unknown.
+    pub fn highlight_code_colored(
+        &self,
+        code: &str,
+        lang: &str,
+        theme_name: &str,
+    ) -> Vec<Vec<CodeSpan>> {
         let syntax = self
             .syntax_set
             .find_syntax_by_token(lang)
             .or_else(|| self.syntax_set.find_syntax_by_extension(lang))
             .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
-        let theme = &self.theme_set.themes["base16-ocean.dark"];
+        let themes = &self.theme_set.themes;
+        let theme = themes
+            .get(theme_name)
+            .or_else(|| themes.get("base16-ocean.dark"))
+            .expect("syntect default themes missing");
         let mut h = HighlightLines::new(syntax, theme);
         let mut out = Vec::new();
         for line in LinesWithEndings::from(code) {
             let ranges = h.highlight_line(line, &self.syntax_set).unwrap_or_default();
-            let text: String = ranges.into_iter().map(|(_, t)| t).collect();
-            out.push(text.trim_end_matches('\n').to_string());
+            let spans = ranges
+                .into_iter()
+                .map(|(style, text)| CodeSpan {
+                    text: text.trim_end_matches('\n').to_string(),
+                    color: [style.foreground.r, style.foreground.g, style.foreground.b],
+                })
+                .collect();
+            out.push(spans);
         }
         if out.is_empty() {
-            out.push(String::new());
+            out.push(vec![CodeSpan {
+                text: String::new(),
+                color: [128, 128, 128],
+            }]);
         }
         out
     }
 }
 
-fn render_block(src: &str, hl: &Highlighter) -> Vec<PreviewLine> {
+fn render_block(src: &str, hl: &Highlighter, theme: &str) -> Vec<PreviewLine> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -153,10 +193,7 @@ fn render_block(src: &str, hl: &Highlighter) -> Vec<PreviewLine> {
     let mut list_depth = 0i32;
 
     let flush = |buf: &mut String, lines: &mut Vec<PreviewLine>, kind: LineKind| {
-        lines.push(PreviewLine {
-            text: std::mem::take(buf),
-            kind,
-        });
+        lines.push(PreviewLine::plain(std::mem::take(buf), kind));
     };
 
     for ev in parser {
@@ -183,20 +220,16 @@ fn render_block(src: &str, hl: &Highlighter) -> Vec<PreviewLine> {
                 } else {
                     &code_lang
                 };
-                lines.push(PreviewLine {
-                    text: format!("┌─ {lang}"),
-                    kind: LineKind::Meta,
-                });
-                for l in hl.highlight_code_plain(&code_buf, lang) {
+                lines.push(PreviewLine::plain(format!("┌─ {lang}"), LineKind::Meta));
+                for spans in hl.highlight_code_colored(&code_buf, lang, theme) {
+                    let text: String = spans.iter().map(|s| s.text.as_str()).collect();
                     lines.push(PreviewLine {
-                        text: l,
+                        text,
                         kind: LineKind::Code,
+                        spans,
                     });
                 }
-                lines.push(PreviewLine {
-                    text: "└─".into(),
-                    kind: LineKind::Meta,
-                });
+                lines.push(PreviewLine::plain("└─", LineKind::Meta));
             }
             Event::Start(Tag::BlockQuote(_)) => in_quote = true,
             Event::End(TagEnd::BlockQuote(_)) => {
@@ -222,16 +255,23 @@ fn render_block(src: &str, hl: &Highlighter) -> Vec<PreviewLine> {
                     LineKind::Normal
                 };
                 flush(&mut buf, &mut lines, kind);
-                lines.push(PreviewLine {
-                    text: String::new(),
-                    kind: LineKind::Normal,
-                });
+                lines.push(PreviewLine::plain(String::new(), LineKind::Normal));
             }
-            Event::Text(t) | Event::Code(t) => {
+            Event::Text(t) => {
                 if in_code {
                     code_buf.push_str(&t);
                 } else {
                     buf.push_str(&t);
+                }
+            }
+            Event::Code(t) => {
+                if in_code {
+                    code_buf.push_str(&t);
+                } else {
+                    // Keep backtick markers so the UI can style inline code.
+                    buf.push('`');
+                    buf.push_str(&t);
+                    buf.push('`');
                 }
             }
             Event::SoftBreak | Event::HardBreak => {
@@ -240,17 +280,11 @@ fn render_block(src: &str, hl: &Highlighter) -> Vec<PreviewLine> {
                 }
             }
             Event::Rule => {
-                lines.push(PreviewLine {
-                    text: "─".repeat(40),
-                    kind: LineKind::Meta,
-                });
+                lines.push(PreviewLine::plain("─".repeat(40), LineKind::Meta));
             }
             Event::Start(Tag::Table(_)) => {}
             Event::End(TagEnd::Table) => {
-                lines.push(PreviewLine {
-                    text: String::new(),
-                    kind: LineKind::Normal,
-                });
+                lines.push(PreviewLine::plain(String::new(), LineKind::Normal));
             }
             Event::Start(Tag::TableCell) => buf.push_str("│ "),
             Event::End(TagEnd::TableCell) => buf.push(' '),
@@ -265,16 +299,10 @@ fn render_block(src: &str, hl: &Highlighter) -> Vec<PreviewLine> {
         flush(&mut buf, &mut lines, LineKind::Normal);
     }
     if is_incomplete(src) {
-        lines.push(PreviewLine {
-            text: " ⋯ (streaming…)".into(),
-            kind: LineKind::Meta,
-        });
+        lines.push(PreviewLine::plain(" ⋯ (streaming…)", LineKind::Meta));
     }
     if lines.is_empty() {
-        lines.push(PreviewLine {
-            text: String::new(),
-            kind: LineKind::Normal,
-        });
+        lines.push(PreviewLine::plain(String::new(), LineKind::Normal));
     }
     lines
 }
@@ -294,7 +322,9 @@ impl PreviewCache {
         }
     }
 
-    pub fn update(&mut self, md: &str) -> (usize, usize) {
+    /// Rebuild the block list from `md`, reusing cached blocks whose source
+    /// hash AND syntax theme are unchanged.
+    pub fn update(&mut self, md: &str, theme: &str) -> (usize, usize) {
         let sources = split_into_blocks(md);
         let mut new_blocks = Vec::with_capacity(sources.len());
         let mut reused = 0;
@@ -303,18 +333,19 @@ impl PreviewCache {
             let id = hash_str(&src);
             if let Some(&idx) = self.prev_map.get(&id) {
                 if let Some(old) = self.blocks.get(idx) {
-                    if old.id == id {
+                    if old.id == id && old.theme == theme {
                         new_blocks.push(old.clone());
                         reused += 1;
                         continue;
                     }
                 }
             }
-            let lines = render_block(&src, &self.highlighter);
+            let lines = render_block(&src, &self.highlighter, theme);
             new_blocks.push(MdBlock {
                 incomplete: is_incomplete(&src),
                 source: src,
                 id,
+                theme: theme.to_string(),
                 lines,
             });
             rendered += 1;
@@ -325,9 +356,5 @@ impl PreviewCache {
         }
         self.blocks = new_blocks;
         (reused, rendered)
-    }
-
-    pub fn all_lines(&self) -> Vec<&PreviewLine> {
-        self.blocks.iter().flat_map(|b| b.lines.iter()).collect()
     }
 }
