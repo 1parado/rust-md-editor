@@ -5,6 +5,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Debug)]
 pub struct MdBlock {
@@ -85,6 +86,57 @@ fn is_incomplete(src: &str) -> bool {
     fence != 0
 }
 
+fn pad_cell(s: &str, width: usize) -> String {
+    let w = s.width();
+    if w >= width {
+        s.to_string()
+    } else {
+        format!("{}{}", s, " ".repeat(width - w))
+    }
+}
+
+fn flush_table(rows: &[Vec<String>], header_rows: usize, lines: &mut Vec<Line<'static>>) {
+    if rows.is_empty() {
+        return;
+    }
+    let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    if cols == 0 {
+        return;
+    }
+    let mut widths = vec![3usize; cols];
+    for row in rows {
+        for (i, cell) in row.iter().enumerate() {
+            widths[i] = widths[i].max(cell.width().max(1));
+        }
+    }
+    for (ri, row) in rows.iter().enumerate() {
+        let mut cells = Vec::new();
+        for i in 0..cols {
+            let text = row.get(i).map(|s| s.as_str()).unwrap_or("");
+            cells.push(pad_cell(text, widths[i]));
+        }
+        let line = format!("│ {} │", cells.join(" │ "));
+        if ri < header_rows {
+            lines.push(Line::from(Span::styled(
+                line,
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            )));
+            let sep: String = widths
+                .iter()
+                .map(|w| "─".repeat(*w))
+                .collect::<Vec<_>>()
+                .join("─┼─");
+            lines.push(Line::from(Span::styled(
+                format!("├─{}─┤", sep),
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            lines.push(Line::from(line));
+        }
+    }
+    lines.push(Line::from(""));
+}
+
 fn render_block(src: &str, highlighter: &Highlighter) -> Vec<Line<'static>> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
@@ -100,6 +152,14 @@ fn render_block(src: &str, highlighter: &Highlighter) -> Vec<Line<'static>> {
     let mut code_buf = String::new();
     let mut list_depth = 0i32;
     let mut heading_level = 0u8;
+
+    // table state
+    let mut in_table = false;
+    let mut table_rows: Vec<Vec<String>> = Vec::new();
+    let mut table_header_rows = 0usize;
+    let mut current_row: Vec<String> = Vec::new();
+    let mut cell_buf = String::new();
+    let mut in_header = false;
 
     let flush_line = |spans: &mut Vec<Span<'static>>, lines: &mut Vec<Line<'static>>| {
         if !spans.is_empty() {
@@ -156,9 +216,41 @@ fn render_block(src: &str, highlighter: &Highlighter) -> Vec<Line<'static>> {
                 )));
                 code_buf.clear();
             }
+            MdEvent::Start(Tag::Table(_)) => {
+                in_table = true;
+                table_rows.clear();
+                table_header_rows = 0;
+            }
+            MdEvent::End(TagEnd::Table) => {
+                flush_table(&table_rows, table_header_rows, &mut lines);
+                in_table = false;
+            }
+            MdEvent::Start(Tag::TableHead) => {
+                in_header = true;
+            }
+            MdEvent::End(TagEnd::TableHead) => {
+                in_header = false;
+            }
+            MdEvent::Start(Tag::TableRow) => {
+                current_row.clear();
+            }
+            MdEvent::End(TagEnd::TableRow) => {
+                if in_header {
+                    table_header_rows += 1;
+                }
+                table_rows.push(std::mem::take(&mut current_row));
+            }
+            MdEvent::Start(Tag::TableCell) => {
+                cell_buf.clear();
+            }
+            MdEvent::End(TagEnd::TableCell) => {
+                current_row.push(std::mem::take(&mut cell_buf));
+            }
             MdEvent::Text(text) => {
                 if in_code {
                     code_buf.push_str(&text);
+                } else if in_table {
+                    cell_buf.push_str(&text);
                 } else {
                     current_spans.push(Span::raw(text.to_string()));
                 }
@@ -166,6 +258,8 @@ fn render_block(src: &str, highlighter: &Highlighter) -> Vec<Line<'static>> {
             MdEvent::Code(text) => {
                 if in_code {
                     code_buf.push_str(&text);
+                } else if in_table {
+                    cell_buf.push_str(&text);
                 } else {
                     current_spans.push(Span::styled(
                         text.to_string(),
@@ -174,7 +268,9 @@ fn render_block(src: &str, highlighter: &Highlighter) -> Vec<Line<'static>> {
                 }
             }
             MdEvent::SoftBreak | MdEvent::HardBreak => {
-                flush_line(&mut current_spans, &mut lines);
+                if !in_table {
+                    flush_line(&mut current_spans, &mut lines);
+                }
             }
             MdEvent::Start(Tag::List(_)) => {
                 list_depth += 1;
