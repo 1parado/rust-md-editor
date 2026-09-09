@@ -1,85 +1,52 @@
 # PRD — rust-md-editor
 
-## Product
-
-轻量级终端 Markdown 编辑器。目标：体积小、启动快、增量预览（streamdown 风格）、只在 GitHub CI 发版。
-
 ## Process (loop)
 
-每个版本发布后：
-
 1. 对照本 PRD + CI 日志做差距分析
-2. 更新本 PRD 的「本轮目标」
+2. 更新「本轮目标」
 3. 实现 → 推送 main → workflow_dispatch 发版
-4. 若 CI 失败，修编译错误后重发，不阻塞下一轮
+4. CI 失败则修到绿再发
 
-**禁止**：本地 `cargo build --release` 作为发版手段。
-
----
-
-## v0.2.0（已完成）
-
-- 模块化：`buffer` / `highlight` / `preview` / `app` / `draw` / `events`
-- 增量 block 哈希缓存 + incomplete fence `streaming…`
-- syntect 源码轻量着色 + code fence 高亮
-- 滚动同步、鼠标点击/滚轮
-- 多平台 CI Release
+**禁止**本地 `cargo build --release` 作为发版手段。
 
 ---
 
-## v0.3.0（本轮）
+## 已完成
 
-### P0 — 正确性
+### v0.2.0
+模块化 · 增量 block · syntect · 滚动同步 · 多平台 CI
 
-| ID | 问题 | 方案 |
+### v0.3.0
+UTF-8 光标 · 脏退出确认 · Home/End · 按词跳转 · 比例滚动同步 · 预览 debounce
+
+---
+
+## v0.4.0（本轮）
+
+| ID | 目标 | 方案 |
 |----|------|------|
-| P0-1 | 光标按字节 `split_at`，中文等易 panic | 按 char boundary 安全切分 |
-| P0-2 | 脏文件直接退出无提示 | Ctrl+Q 二次确认 |
-| P0-3 | 预览在 draw 里同步刷新，卡输入 | 仅事件循环 debounce 刷新 |
+| P0-1 | 查找 | Ctrl+F 输入查询，Enter/n 下一个，N 上一个，Esc 退出 |
+| P0-2 | 水平滚动 | 长行时自动/方向键保持光标可见 |
+| P1-1 | 状态栏显示查找模式 | `Find: query (k/n)` |
+| P1-2 | 文档同步 | README / 帮助 |
 
-### P1 — 编辑体验
+### 非目标
 
-| ID | 问题 | 方案 |
-|----|------|------|
-| P1-1 | 无 Home / End | 行首行尾 |
-| P1-2 | 无 Ctrl+Left/Right | 按词跳转 |
-| P1-3 | 滚动同步用相同行 delta | 按比例映射 |
-| P1-4 | 帮助文案过简 | 补全快捷键 |
-
-### P2 — 仓库卫生
-
-| ID | 方案 |
-|----|------|
-| P2-1 | 删除 `src/main.rs.gz.b64`、`src/sections/` 等遗留 |
-| P2-2 | version → 0.3.0，README 同步 |
-
-### 非目标（本轮不做）
-
-- 插件系统、LSP、多标签、图形界面
-- 完整 WYSIWYG 表格编辑
-- 本地 release 构建
+- 替换（Ctrl+H replace）
+- 正则查找
+- 完整打开文件 UI
 
 ### 验收
 
-- `cargo build --release` 在 CI 五平台成功
-- 中文输入不 panic
-- 未保存退出需确认
-- Release 产物可下载
+- CI 五平台成功
+- Ctrl+F 可定位匹配并 n/N 循环
+- 长行光标不跑出可视区
 
 ---
 
-## v0.4.0（候选）
+## v0.5.0（候选）
 
-- 水平滚动 / 长行
-- 查找（Ctrl+F）
-- 打开文件对话框或路径输入
-- 更完整 GFM（表格对齐显示）
-- 二进制体积进一步裁剪（可选 features）
-
----
-
-## Metrics
-
-- 启动：打开后首次预览 < 200ms（小文件）
-- 增量：编辑单 block 时 reuse 率尽量高
-- 体积：release strip + LTO + opt-level=z
+- 查找并替换
+- 行号跳转 Ctrl+G
+- GFM 表格更整齐对齐
+- 可选：裁掉无用 syntect 语法减小体积
