@@ -156,16 +156,21 @@ fn render_block(src: &str, highlighter: &Highlighter) -> Vec<Line<'static>> {
                 )));
                 code_buf.clear();
             }
-            MdEvent::Text(text) | MdEvent::Code(text) => {
+            MdEvent::Text(text) => {
                 if in_code {
                     code_buf.push_str(&text);
                 } else {
-                    let style = if matches!(event, MdEvent::Code(_)) {
-                        Style::default().fg(Color::Yellow)
-                    } else {
-                        Style::default()
-                    };
-                    current_spans.push(Span::styled(text.to_string(), style));
+                    current_spans.push(Span::raw(text.to_string()));
+                }
+            }
+            MdEvent::Code(text) => {
+                if in_code {
+                    code_buf.push_str(&text);
+                } else {
+                    current_spans.push(Span::styled(
+                        text.to_string(),
+                        Style::default().fg(Color::Yellow),
+                    ));
                 }
             }
             MdEvent::SoftBreak | MdEvent::HardBreak => {
