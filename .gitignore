@@ -1,0 +1,70 @@
+# Build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo
+# Keep Cargo.lock for binary crates (reproducible CI builds)
+# Cargo.lock
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Env & secrets (never commit)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+credentials.json
+secrets/
+.secrets/
+config.local.*
+*.local.toml
+*.local.yaml
+*.local.yml
+
+# Debug / profiling
+*.log
+perf.data
+flamegraph.svg
+heaptrack.*
+
+# Test / coverage
+/coverage/
+*.profraw
+*.profdata
+lcov.info
+tarpaulin-report.html
+
+# Release artifacts downloaded locally (prefer CI releases)
+/dist/
+/release/
+*.AppImage
+*.dmg
+*.msi
+*.exe
+!ci/**
+
+# Misc
+.direnv/
+.nix-shell
