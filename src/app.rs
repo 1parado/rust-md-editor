@@ -1,353 +1,372 @@
-//! App state
-use crate::buffer::Buffer;
-use crate::highlight::Highlighter;
-use crate::preview::PreviewCache;
-use anyhow::Result;
-use ratatui::text::Line;
-use std::fs;
+//! Desktop app state + egui UI
+use crate::preview::{LineKind, PreviewCache};
+use eframe::egui;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
-pub struct App {
-    pub buffer: Buffer,
-    pub path: Option<PathBuf>,
-    pub dirty: bool,
-    pub status: String,
-    pub show_help: bool,
-    pub quit_confirm: bool,
-    pub highlighter: Highlighter,
-    pub preview: PreviewCache,
-    pub preview_scroll: usize,
-    pub scroll_sync: bool,
-    pub focus: u8,
-    pub last_reuse: usize,
-    pub last_render: usize,
-    pub preview_lines: Vec<Line<'static>>,
-    pub need_preview_refresh: bool,
-    pub finding: bool,
-    pub find_query: String,
-    pub find_count: usize,
-    pub replacing: bool,
-    pub replace_with: String,
-    pub goto_mode: bool,
-    pub goto_input: String,
+pub struct MdEditorApp {
+    source: String,
+    path: Option<PathBuf>,
+    dirty: bool,
+    preview: PreviewCache,
+    last_reuse: usize,
+    last_render: usize,
+    need_refresh: bool,
+    last_edit: Instant,
+    status: String,
+    find_open: bool,
+    find_query: String,
+    replace_with: String,
+    split: f32,
 }
 
-impl App {
-    pub fn new(path: Option<PathBuf>) -> Result<Self> {
-        let (content, path) = if let Some(p) = path {
-            let content = fs::read_to_string(&p).unwrap_or_default();
-            (content, Some(p))
+impl MdEditorApp {
+    pub fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>) -> Self {
+        // Dark-ish default
+        let mut style = (*cc.egui_ctx.style()).clone();
+        style.visuals = egui::Visuals::dark();
+        cc.egui_ctx.set_style(style);
+
+        let (source, path) = if let Some(p) = path {
+            (
+                std::fs::read_to_string(&p).unwrap_or_default(),
+                Some(p),
+            )
         } else {
             (
                 String::from(
-                    "# Hello, Streamdown-style Editor\n\n\
-                     Ctrl+F find · Ctrl+G goto · Ctrl+R replace\n\n\
-                     | A | B |\n\
-                     |---|---|\n\
-                     | 1 | 2 |\n\n\
-                     ```rust\n\
-                     fn main() { println!(\"hi\"); }\n\
-                     ```\n",
+                    "# rust-md-editor\n\n\
+桌面版 **Markdown** 编辑器（egui）。\n\n\
+- 增量预览（streamdown 风格）\n\
+- 语法高亮代码块\n\
+- 打开 / 保存文件\n\n\
+| Feature | Status |\n\
+|---------|--------|\n\
+| Preview | OK |\n\
+| Find    | OK |\n\n\
+```rust\n\
+fn main() {\n\
+    println!(\"Hello GUI\");\n\
+}\n\
+```\n\n\
+> 未闭合 fence 会显示 streaming…\n",
                 ),
                 None,
             )
         };
 
         let mut app = Self {
-            buffer: Buffer::new(&content),
+            source,
             path,
             dirty: false,
-            status: "Ready · Ctrl+S · Ctrl+F find · Ctrl+G goto · Ctrl+R replace · ?".into(),
-            show_help: false,
-            quit_confirm: false,
-            highlighter: Highlighter::new(),
             preview: PreviewCache::new(),
-            preview_scroll: 0,
-            scroll_sync: true,
-            focus: 0,
             last_reuse: 0,
             last_render: 0,
-            preview_lines: Vec::new(),
-            need_preview_refresh: true,
-            finding: false,
+            need_refresh: true,
+            last_edit: Instant::now(),
+            status: "Ready".into(),
+            find_open: false,
             find_query: String::new(),
-            find_count: 0,
-            replacing: false,
             replace_with: String::new(),
-            goto_mode: false,
-            goto_input: String::new(),
+            split: 0.5,
         };
         app.refresh_preview();
-        Ok(app)
+        app
     }
 
-    pub fn refresh_preview(&mut self) {
-        let (reused, rendered) = self
-            .preview
-            .update(&self.buffer.content(), &self.highlighter);
-        self.last_reuse = reused;
-        self.last_render = rendered;
-        self.preview_lines = self.preview.all_lines();
-        self.need_preview_refresh = false;
-        if !self.quit_confirm && !self.finding && !self.replacing && !self.goto_mode {
-            self.status = format!(
-                "blocks: {} reused / {} rendered · sync:{} · focus:{}",
-                reused,
-                rendered,
-                if self.scroll_sync { "ON" } else { "OFF" },
-                if self.focus == 0 { "edit" } else { "preview" }
-            );
-        }
+    fn refresh_preview(&mut self) {
+        let (r, n) = self.preview.update(&self.source);
+        self.last_reuse = r;
+        self.last_render = n;
+        self.need_refresh = false;
+        self.status = format!("blocks: {r} reused / {n} rendered");
     }
 
-    pub fn save(&mut self) -> Result<()> {
+    fn save(&mut self) {
         if let Some(ref path) = self.path {
-            fs::write(path, self.buffer.content())?;
+            if let Err(e) = std::fs::write(path, &self.source) {
+                self.status = format!("Save error: {e}");
+                return;
+            }
             self.dirty = false;
-            self.quit_confirm = false;
             self.status = format!("Saved: {}", path.display());
         } else {
-            let default = PathBuf::from("untitled.md");
-            fs::write(&default, self.buffer.content())?;
-            self.path = Some(default.clone());
+            self.save_as();
+        }
+    }
+
+    fn save_as(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Markdown", &["md", "markdown", "txt"])
+            .save_file()
+        {
+            if let Err(e) = std::fs::write(&path, &self.source) {
+                self.status = format!("Save error: {e}");
+                return;
+            }
+            self.path = Some(path.clone());
             self.dirty = false;
-            self.quit_confirm = false;
-            self.status = format!("Saved: {}", default.display());
+            self.status = format!("Saved: {}", path.display());
         }
-        Ok(())
     }
 
-    pub fn on_edit(&mut self) {
-        self.dirty = true;
-        self.quit_confirm = false;
-        self.need_preview_refresh = true;
-    }
-
-    pub fn request_quit(&mut self) -> bool {
-        if !self.dirty || self.quit_confirm {
-            return true;
+    fn open_file(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Markdown", &["md", "markdown", "txt"])
+            .pick_file()
+        {
+            match std::fs::read_to_string(&path) {
+                Ok(s) => {
+                    self.source = s;
+                    self.path = Some(path);
+                    self.dirty = false;
+                    self.need_refresh = true;
+                    self.status = "Opened".into();
+                }
+                Err(e) => self.status = format!("Open error: {e}"),
+            }
         }
-        self.quit_confirm = true;
-        self.status = "Unsaved changes — Ctrl+Q again to quit, Ctrl+S to save".into();
-        false
     }
 
-    pub fn sync_preview_from_editor(&mut self) {
-        if !self.scroll_sync {
+    fn find_next(&mut self) {
+        let q = self.find_query.to_lowercase();
+        if q.is_empty() {
             return;
         }
-        let elen = self.buffer.line_count().max(1);
-        let plen = self.preview_lines.len().max(1);
-        self.preview_scroll = (self.buffer.scroll * plen) / elen;
-    }
-
-    pub fn sync_editor_from_preview(&mut self) {
-        if !self.scroll_sync {
-            return;
+        let lower = self.source.to_lowercase();
+        let start = self
+            .source
+            .char_indices()
+            .nth(
+                // rough: search from mid if possible — simple from 0 cycling
+                0,
+            )
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let found = lower[start..].find(&q).map(|i| start + i).or_else(|| lower.find(&q));
+        if let Some(idx) = found {
+            // egui TextEdit doesn't expose set cursor easily without TextEditState;
+            // status only for now + scroll hint
+            self.status = format!("Found at byte {idx}");
+        } else {
+            self.status = "No match".into();
         }
-        let elen = self.buffer.line_count().max(1);
-        let plen = self.preview_lines.len().max(1);
-        self.buffer.scroll = (self.preview_scroll * elen) / plen;
     }
 
-    pub fn start_find(&mut self) {
-        self.finding = true;
-        self.replacing = false;
-        self.goto_mode = false;
-        self.focus = 0;
-        self.status = format!(
-            "Find: {}_  (Enter/n · N · Ctrl+R replace · Esc)",
-            self.find_query
-        );
-    }
-
-    pub fn stop_find(&mut self) {
-        self.finding = false;
-        self.replacing = false;
-        self.status = "Find closed".into();
-    }
-
-    pub fn start_replace(&mut self) {
+    fn replace_all(&mut self) {
         if self.find_query.is_empty() {
-            self.start_find();
-            self.status = "Find: type query first, then Ctrl+R".into();
             return;
         }
-        self.finding = true;
-        self.replacing = true;
-        self.status = format!(
-            "Replace '{}' → {}_  (Enter=one · a=all · Esc)",
-            self.find_query, self.replace_with
-        );
-    }
-
-    pub fn start_goto(&mut self) {
-        self.goto_mode = true;
-        self.finding = false;
-        self.replacing = false;
-        self.goto_input.clear();
-        self.status = "Goto line: _  (Enter · Esc)".into();
-    }
-
-    pub fn apply_goto(&mut self) {
-        if let Ok(n) = self.goto_input.parse::<usize>() {
-            let row = n.saturating_sub(1).min(self.buffer.line_count().saturating_sub(1));
-            self.buffer.goto(row, 0);
-            self.status = format!("Goto line {}", row + 1);
-        } else {
-            self.status = "Goto: invalid line number".into();
-        }
-        self.goto_mode = false;
-    }
-
-    pub fn find_next(&mut self, forward: bool) {
         let q = self.find_query.to_lowercase();
-        if q.is_empty() {
-            self.status = "Find: (empty query)".into();
-            return;
+        let mut out = String::new();
+        let mut rest = self.source.as_str();
+        let mut rest_l = self.source.to_lowercase();
+        let mut rest_l_ref = rest_l.as_str();
+        let mut n = 0;
+        while let Some(pos) = rest_l_ref.find(&q) {
+            out.push_str(&rest[..pos]);
+            out.push_str(&self.replace_with);
+            rest = &rest[pos + q.len()..];
+            rest_l_ref = &rest_l_ref[pos + q.len()..];
+            n += 1;
         }
-        let rows = self.buffer.lines.len();
-        if rows == 0 {
-            return;
-        }
-        let start_row = self.buffer.cursor_row;
-        let start_col = self.buffer.cursor_col;
-        let mut checked = 0usize;
-        let mut row = start_row;
-        let mut col = if forward {
-            let line = &self.buffer.lines[row];
-            let mut c = start_col;
-            if c < line.len() {
-                c += 1;
-                while c < line.len() && !line.is_char_boundary(c) {
-                    c += 1;
-                }
-            }
-            c
-        } else {
-            start_col
-        };
+        out.push_str(rest);
+        self.source = out;
+        self.dirty = true;
+        self.need_refresh = true;
+        self.status = format!("Replaced {n}");
+    }
+}
 
-        while checked <= rows {
-            let line = &self.buffer.lines[row];
-            let lower = line.to_lowercase();
-            if forward {
-                if col <= lower.len() {
-                    if let Some(rel) = lower[col.min(lower.len())..].find(&q) {
-                        let abs = col + rel;
-                        self.buffer.goto(row, abs);
-                        self.find_count = self.count_matches(&q);
-                        self.status = format!(
-                            "Find: '{}' · {}:{} · {} hits · n/N · Ctrl+R",
-                            self.find_query,
-                            row + 1,
-                            abs + 1,
-                            self.find_count
-                        );
-                        return;
+impl eframe::App for MdEditorApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Debounced preview refresh
+        if self.need_refresh && self.last_edit.elapsed() > Duration::from_millis(120) {
+            self.refresh_preview();
+        }
+
+        egui::TopBottomPanel::top("menu").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Open…").clicked() {
+                        self.open_file();
+                        ui.close_menu();
                     }
-                }
-                checked += 1;
-                row = (row + 1) % rows;
-                col = 0;
-            } else {
-                let end = col.min(lower.len());
-                if let Some(rel) = lower[..end].rfind(&q) {
-                    self.buffer.goto(row, rel);
-                    self.find_count = self.count_matches(&q);
-                    self.status = format!(
-                        "Find: '{}' · {}:{} · {} hits · n/N · Ctrl+R",
-                        self.find_query,
-                        row + 1,
-                        rel + 1,
-                        self.find_count
-                    );
-                    return;
-                }
-                checked += 1;
-                if row == 0 {
-                    row = rows - 1;
-                } else {
-                    row -= 1;
-                }
-                col = self.buffer.lines[row].len();
-            }
-        }
-        self.status = format!("Find: '{}' · no match", self.find_query);
-    }
+                    if ui.button("Save").clicked() {
+                        self.save();
+                        ui.close_menu();
+                    }
+                    if ui.button("Save As…").clicked() {
+                        self.save_as();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Quit").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+                ui.menu_button("Edit", |ui| {
+                    if ui.button("Find / Replace").clicked() {
+                        self.find_open = true;
+                        ui.close_menu();
+                    }
+                });
+                ui.menu_button("View", |ui| {
+                    ui.add(egui::Slider::new(&mut self.split, 0.2..=0.8).text("Split"));
+                });
+                ui.separator();
+                let title = match &self.path {
+                    Some(p) => format!(
+                        "{}{}",
+                        p.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
+                        if self.dirty { " *" } else { "" }
+                    ),
+                    None => format!("untitled.md{}", if self.dirty { " *" } else { "" }),
+                };
+                ui.label(title);
+            });
+        });
 
-    fn count_matches(&self, q_lower: &str) -> usize {
-        self.buffer
-            .lines
-            .iter()
-            .map(|l| l.to_lowercase().matches(q_lower).count())
-            .sum()
-    }
+        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(&self.status);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(format!(
+                        "{} chars · {} lines",
+                        self.source.len(),
+                        self.source.lines().count()
+                    ));
+                });
+            });
+        });
 
-    /// Replace match at cursor if it starts with find_query (case-insensitive).
-    pub fn replace_one(&mut self) {
-        let q = self.find_query.clone();
-        if q.is_empty() {
-            return;
+        if self.find_open {
+            egui::Window::new("Find / Replace")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Find:");
+                        ui.text_edit_singleline(&mut self.find_query);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Replace:");
+                        ui.text_edit_singleline(&mut self.replace_with);
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("Find").clicked() {
+                            self.find_next();
+                        }
+                        if ui.button("Replace all").clicked() {
+                            self.replace_all();
+                        }
+                        if ui.button("Close").clicked() {
+                            self.find_open = false;
+                        }
+                    });
+                });
         }
-        let row = self.buffer.cursor_row;
-        let col = self.buffer.cursor_col;
-        let line = &self.buffer.lines[row];
-        let lower = line.to_lowercase();
-        let q_lower = q.to_lowercase();
-        if col <= lower.len() && lower[col..].starts_with(&q_lower) {
-            let end = col + q.len().min(line.len() - col);
-            // use actual length from original by matching char count of q_lower in lower
-            let matched_len = {
-                // find how many bytes in original correspond to q_lower length in lower slice
-                q_lower.len()
-            };
-            let end = (col + matched_len).min(line.len());
-            let mut end = end;
-            while end > col && !line.is_char_boundary(end) {
-                end -= 1;
-            }
-            self.buffer.lines[row].replace_range(col..end, &self.replace_with);
-            self.buffer.cursor_col = col + self.replace_with.len();
-            self.on_edit();
-            self.find_next(true);
-            self.status = format!("Replaced one · next? n · all: a");
-        } else {
-            self.find_next(true);
-            self.status = "No match at cursor — moved to next".into();
-        }
-    }
 
-    pub fn replace_all(&mut self) {
-        let q = self.find_query.to_lowercase();
-        if q.is_empty() {
-            return;
-        }
-        let mut total = 0usize;
-        for line in &mut self.buffer.lines {
-            let lower = line.to_lowercase();
-            if !lower.contains(&q) {
-                continue;
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let full = ui.available_width();
+            let left_w = full * self.split;
+
+            ui.horizontal(|ui| {
+                // ---- Editor ----
+                ui.allocate_ui(egui::vec2(left_w - 4.0, ui.available_height()), |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new("Source").strong());
+                        egui::ScrollArea::both()
+                            .id_salt("editor_scroll")
+                            .show(ui, |ui| {
+                                let response = ui.add(
+                                    egui::TextEdit::multiline(&mut self.source)
+                                        .code_editor()
+                                        .desired_width(f32::INFINITY)
+                                        .desired_rows(40),
+                                );
+                                if response.changed() {
+                                    self.dirty = true;
+                                    self.need_refresh = true;
+                                    self.last_edit = Instant::now();
+                                }
+                            });
+                    });
+                });
+
+                ui.separator();
+
+                // ---- Preview ----
+                ui.allocate_ui(egui::vec2(full - left_w - 4.0, ui.available_height()), |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Preview ({} blocks)",
+                                self.preview.blocks.len()
+                            ))
+                            .strong(),
+                        );
+                        egui::ScrollArea::vertical()
+                            .id_salt("preview_scroll")
+                            .show(ui, |ui| {
+                                for line in self.preview.all_lines() {
+                                    let rich = match line.kind {
+                                        LineKind::Heading(1) => egui::RichText::new(&line.text)
+                                            .size(26.0)
+                                            .strong()
+                                            .color(egui::Color32::from_rgb(200, 160, 255)),
+                                        LineKind::Heading(2) => egui::RichText::new(&line.text)
+                                            .size(22.0)
+                                            .strong()
+                                            .color(egui::Color32::from_rgb(140, 180, 255)),
+                                        LineKind::Heading(_) => egui::RichText::new(&line.text)
+                                            .size(18.0)
+                                            .strong()
+                                            .color(egui::Color32::from_rgb(120, 220, 220)),
+                                        LineKind::Code => egui::RichText::new(&line.text)
+                                            .monospace()
+                                            .color(egui::Color32::from_rgb(180, 230, 180)),
+                                        LineKind::Quote => egui::RichText::new(format!(
+                                            "│ {}",
+                                            line.text
+                                        ))
+                                        .italics()
+                                        .color(egui::Color32::from_rgb(140, 200, 140)),
+                                        LineKind::Table => egui::RichText::new(&line.text)
+                                            .monospace()
+                                            .color(egui::Color32::LIGHT_BLUE),
+                                        LineKind::Meta => egui::RichText::new(&line.text)
+                                            .small()
+                                            .color(egui::Color32::GRAY),
+                                        LineKind::Normal => egui::RichText::new(&line.text),
+                                    };
+                                    ui.label(rich);
+                                }
+                            });
+                    });
+                });
+            });
+        });
+
+        // Keyboard shortcuts
+        ctx.input(|i| {
+            if i.modifiers.command && i.key_pressed(egui::Key::S) {
+                // handled below via consume — check flags
             }
-            // case-insensitive replace by scanning
-            let mut out = String::new();
-            let mut rest = line.as_str();
-            let mut rest_lower = lower.as_str();
-            while let Some(pos) = rest_lower.find(&q) {
-                out.push_str(&rest[..pos]);
-                out.push_str(&self.replace_with);
-                rest = &rest[pos + q.len()..];
-                rest_lower = &rest_lower[pos + q.len()..];
-                total += 1;
-            }
-            out.push_str(rest);
-            *line = out;
+        });
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
+            self.save();
         }
-        if total > 0 {
-            self.on_edit();
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::O)) {
+            self.open_file();
         }
-        self.replacing = false;
-        self.finding = false;
-        self.status = format!("Replaced {} occurrence(s)", total);
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
+            self.find_open = true;
+        }
+
+        // Keep animating while debounce pending
+        if self.need_refresh {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
     }
 }

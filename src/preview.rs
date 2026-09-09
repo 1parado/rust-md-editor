@@ -1,18 +1,34 @@
-//! Incremental markdown blocks (streamdown-style)
-use crate::highlight::Highlighter;
-use pulldown_cmark::{CodeBlockKind, Event as MdEvent, Options, Parser, Tag, TagEnd};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+//! Incremental markdown blocks → plain preview lines (streamdown-style)
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use unicode_width::UnicodeWidthStr;
+use syntect::easy::HighlightLines;
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::SyntaxSet;
+use syntect::util::LinesWithEndings;
 
 #[derive(Clone, Debug)]
 pub struct MdBlock {
     pub source: String,
     pub id: String,
-    pub rendered: Vec<Line<'static>>,
+    pub lines: Vec<PreviewLine>,
     pub incomplete: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreviewLine {
+    pub text: String,
+    pub kind: LineKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineKind {
+    Normal,
+    Heading(u8),
+    Code,
+    Quote,
+    Table,
+    Meta,
 }
 
 fn hash_str(s: &str) -> String {
@@ -86,241 +102,179 @@ fn is_incomplete(src: &str) -> bool {
     fence != 0
 }
 
-fn pad_cell(s: &str, width: usize) -> String {
-    let w = s.width();
-    if w >= width {
-        s.to_string()
-    } else {
-        format!("{}{}", s, " ".repeat(width - w))
+pub struct Highlighter {
+    syntax_set: SyntaxSet,
+    theme_set: ThemeSet,
+}
+
+impl Highlighter {
+    pub fn new() -> Self {
+        Self {
+            syntax_set: SyntaxSet::load_defaults_newlines(),
+            theme_set: ThemeSet::load_defaults(),
+        }
+    }
+
+    pub fn highlight_code_plain(&self, code: &str, lang: &str) -> Vec<String> {
+        let syntax = self
+            .syntax_set
+            .find_syntax_by_token(lang)
+            .or_else(|| self.syntax_set.find_syntax_by_extension(lang))
+            .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
+        let theme = &self.theme_set.themes["base16-ocean.dark"];
+        let mut h = HighlightLines::new(syntax, theme);
+        let mut out = Vec::new();
+        for line in LinesWithEndings::from(code) {
+            let ranges = h.highlight_line(line, &self.syntax_set).unwrap_or_default();
+            let text: String = ranges.into_iter().map(|(_, t)| t).collect();
+            out.push(text.trim_end_matches('\n').to_string());
+        }
+        if out.is_empty() {
+            out.push(String::new());
+        }
+        out
     }
 }
 
-fn flush_table(rows: &[Vec<String>], header_rows: usize, lines: &mut Vec<Line<'static>>) {
-    if rows.is_empty() {
-        return;
-    }
-    let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
-    if cols == 0 {
-        return;
-    }
-    let mut widths = vec![3usize; cols];
-    for row in rows {
-        for (i, cell) in row.iter().enumerate() {
-            widths[i] = widths[i].max(cell.width().max(1));
-        }
-    }
-    for (ri, row) in rows.iter().enumerate() {
-        let mut cells = Vec::new();
-        for i in 0..cols {
-            let text = row.get(i).map(|s| s.as_str()).unwrap_or("");
-            cells.push(pad_cell(text, widths[i]));
-        }
-        let line = format!("│ {} │", cells.join(" │ "));
-        if ri < header_rows {
-            lines.push(Line::from(Span::styled(
-                line,
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            )));
-            let sep: String = widths
-                .iter()
-                .map(|w| "─".repeat(*w))
-                .collect::<Vec<_>>()
-                .join("─┼─");
-            lines.push(Line::from(Span::styled(
-                format!("├─{}─┤", sep),
-                Style::default().fg(Color::DarkGray),
-            )));
-        } else {
-            lines.push(Line::from(line));
-        }
-    }
-    lines.push(Line::from(""));
-}
-
-fn render_block(src: &str, highlighter: &Highlighter) -> Vec<Line<'static>> {
+fn render_block(src: &str, hl: &Highlighter) -> Vec<PreviewLine> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
-    options.insert(Options::ENABLE_FOOTNOTES);
 
     let parser = Parser::new_ext(src, options);
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut current_spans: Vec<Span<'static>> = Vec::new();
+    let mut lines: Vec<PreviewLine> = Vec::new();
+    let mut buf = String::new();
     let mut in_code = false;
     let mut code_lang = String::new();
     let mut code_buf = String::new();
+    let mut heading: u8 = 0;
+    let mut in_quote = false;
     let mut list_depth = 0i32;
-    let mut heading_level = 0u8;
 
-    // table state
-    let mut in_table = false;
-    let mut table_rows: Vec<Vec<String>> = Vec::new();
-    let mut table_header_rows = 0usize;
-    let mut current_row: Vec<String> = Vec::new();
-    let mut cell_buf = String::new();
-    let mut in_header = false;
-
-    let flush_line = |spans: &mut Vec<Span<'static>>, lines: &mut Vec<Line<'static>>| {
-        if !spans.is_empty() {
-            lines.push(Line::from(std::mem::take(spans)));
-        } else {
-            lines.push(Line::from(""));
-        }
+    let flush = |buf: &mut String, lines: &mut Vec<PreviewLine>, kind: LineKind| {
+        lines.push(PreviewLine {
+            text: std::mem::take(buf),
+            kind,
+        });
     };
 
-    for event in parser {
-        match event {
-            MdEvent::Start(Tag::Heading { level, .. }) => {
-                heading_level = level as u8;
+    for ev in parser {
+        match ev {
+            Event::Start(Tag::Heading { level, .. }) => {
+                heading = level as u8;
             }
-            MdEvent::End(TagEnd::Heading(_)) => {
-                if !current_spans.is_empty() {
-                    let text: String = current_spans.iter().map(|s| s.content.as_ref()).collect();
-                    let color = match heading_level {
-                        1 => Color::Magenta,
-                        2 => Color::Blue,
-                        3 => Color::Cyan,
-                        _ => Color::Gray,
-                    };
-                    lines.push(Line::from(Span::styled(
-                        text,
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    )));
-                    current_spans.clear();
-                }
-                heading_level = 0;
+            Event::End(TagEnd::Heading(_)) => {
+                flush(&mut buf, &mut lines, LineKind::Heading(heading));
+                heading = 0;
             }
-            MdEvent::Start(Tag::CodeBlock(kind)) => {
+            Event::Start(Tag::CodeBlock(kind)) => {
                 in_code = true;
                 code_lang = match kind {
                     CodeBlockKind::Indented => String::new(),
-                    CodeBlockKind::Fenced(lang) => lang.to_string(),
+                    CodeBlockKind::Fenced(l) => l.to_string(),
                 };
                 code_buf.clear();
             }
-            MdEvent::End(TagEnd::CodeBlock) => {
+            Event::End(TagEnd::CodeBlock) => {
                 in_code = false;
-                let lang = if code_lang.is_empty() { "txt" } else { &code_lang };
-                let hl = highlighter.highlight_code(&code_buf, lang);
-                lines.push(Line::from(Span::styled(
-                    format!("┌─ {} ", lang),
-                    Style::default().fg(Color::DarkGray),
-                )));
-                for l in hl {
-                    lines.push(l);
-                }
-                lines.push(Line::from(Span::styled(
-                    "└─",
-                    Style::default().fg(Color::DarkGray),
-                )));
-                code_buf.clear();
-            }
-            MdEvent::Start(Tag::Table(_)) => {
-                in_table = true;
-                table_rows.clear();
-                table_header_rows = 0;
-            }
-            MdEvent::End(TagEnd::Table) => {
-                flush_table(&table_rows, table_header_rows, &mut lines);
-                in_table = false;
-            }
-            MdEvent::Start(Tag::TableHead) => {
-                in_header = true;
-            }
-            MdEvent::End(TagEnd::TableHead) => {
-                in_header = false;
-            }
-            MdEvent::Start(Tag::TableRow) => {
-                current_row.clear();
-            }
-            MdEvent::End(TagEnd::TableRow) => {
-                if in_header {
-                    table_header_rows += 1;
-                }
-                table_rows.push(std::mem::take(&mut current_row));
-            }
-            MdEvent::Start(Tag::TableCell) => {
-                cell_buf.clear();
-            }
-            MdEvent::End(TagEnd::TableCell) => {
-                current_row.push(std::mem::take(&mut cell_buf));
-            }
-            MdEvent::Text(text) => {
-                if in_code {
-                    code_buf.push_str(&text);
-                } else if in_table {
-                    cell_buf.push_str(&text);
+                let lang = if code_lang.is_empty() {
+                    "txt"
                 } else {
-                    current_spans.push(Span::raw(text.to_string()));
+                    &code_lang
+                };
+                lines.push(PreviewLine {
+                    text: format!("┌─ {lang}"),
+                    kind: LineKind::Meta,
+                });
+                for l in hl.highlight_code_plain(&code_buf, lang) {
+                    lines.push(PreviewLine {
+                        text: l,
+                        kind: LineKind::Code,
+                    });
                 }
+                lines.push(PreviewLine {
+                    text: "└─".into(),
+                    kind: LineKind::Meta,
+                });
             }
-            MdEvent::Code(text) => {
-                if in_code {
-                    code_buf.push_str(&text);
-                } else if in_table {
-                    cell_buf.push_str(&text);
+            Event::Start(Tag::BlockQuote(_)) => in_quote = true,
+            Event::End(TagEnd::BlockQuote(_)) => {
+                if !buf.is_empty() {
+                    flush(&mut buf, &mut lines, LineKind::Quote);
+                }
+                in_quote = false;
+            }
+            Event::Start(Tag::List(_)) => list_depth += 1,
+            Event::End(TagEnd::List(_)) => list_depth = (list_depth - 1).max(0),
+            Event::Start(Tag::Item) => {
+                let ind = "  ".repeat(list_depth.saturating_sub(1) as usize);
+                buf.push_str(&format!("{ind}• "));
+            }
+            Event::End(TagEnd::Item) => {
+                flush(&mut buf, &mut lines, LineKind::Normal);
+            }
+            Event::Start(Tag::Paragraph) => {}
+            Event::End(TagEnd::Paragraph) => {
+                let kind = if in_quote {
+                    LineKind::Quote
                 } else {
-                    current_spans.push(Span::styled(
-                        text.to_string(),
-                        Style::default().fg(Color::Yellow),
-                    ));
+                    LineKind::Normal
+                };
+                flush(&mut buf, &mut lines, kind);
+                lines.push(PreviewLine {
+                    text: String::new(),
+                    kind: LineKind::Normal,
+                });
+            }
+            Event::Text(t) | Event::Code(t) => {
+                if in_code {
+                    code_buf.push_str(&t);
+                } else {
+                    buf.push_str(&t);
                 }
             }
-            MdEvent::SoftBreak | MdEvent::HardBreak => {
-                if !in_table {
-                    flush_line(&mut current_spans, &mut lines);
+            Event::SoftBreak | Event::HardBreak => {
+                if !in_code {
+                    buf.push(' ');
                 }
             }
-            MdEvent::Start(Tag::List(_)) => {
-                list_depth += 1;
+            Event::Rule => {
+                lines.push(PreviewLine {
+                    text: "─".repeat(40),
+                    kind: LineKind::Meta,
+                });
             }
-            MdEvent::End(TagEnd::List(_)) => {
-                list_depth = (list_depth - 1).max(0);
+            Event::Start(Tag::Table(_)) => {}
+            Event::End(TagEnd::Table) => {
+                lines.push(PreviewLine {
+                    text: String::new(),
+                    kind: LineKind::Normal,
+                });
             }
-            MdEvent::Start(Tag::Item) => {
-                let indent = "  ".repeat(list_depth.saturating_sub(1) as usize);
-                current_spans.push(Span::styled(
-                    format!("{}• ", indent),
-                    Style::default().fg(Color::Cyan),
-                ));
-            }
-            MdEvent::End(TagEnd::Item) => {
-                flush_line(&mut current_spans, &mut lines);
-            }
-            MdEvent::Start(Tag::BlockQuote(_)) => {
-                current_spans.push(Span::styled("│ ", Style::default().fg(Color::Green)));
-            }
-            MdEvent::End(TagEnd::BlockQuote(_)) => {
-                flush_line(&mut current_spans, &mut lines);
-            }
-            MdEvent::Rule => {
-                lines.push(Line::from(Span::styled(
-                    "─".repeat(40),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-            MdEvent::Start(Tag::Paragraph) => {}
-            MdEvent::End(TagEnd::Paragraph) => {
-                flush_line(&mut current_spans, &mut lines);
-                lines.push(Line::from(""));
+            Event::Start(Tag::TableCell) => buf.push_str("│ "),
+            Event::End(TagEnd::TableCell) => buf.push(' '),
+            Event::End(TagEnd::TableRow) => {
+                buf.push('│');
+                flush(&mut buf, &mut lines, LineKind::Table);
             }
             _ => {}
         }
     }
-    if !current_spans.is_empty() {
-        flush_line(&mut current_spans, &mut lines);
-    }
-    if lines.is_empty() {
-        lines.push(Line::from(""));
+    if !buf.is_empty() {
+        flush(&mut buf, &mut lines, LineKind::Normal);
     }
     if is_incomplete(src) {
-        lines.push(Line::from(Span::styled(
-            " ⋯ (streaming…)",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
-        )));
+        lines.push(PreviewLine {
+            text: " ⋯ (streaming…)".into(),
+            kind: LineKind::Meta,
+        });
+    }
+    if lines.is_empty() {
+        lines.push(PreviewLine {
+            text: String::new(),
+            kind: LineKind::Normal,
+        });
     }
     lines
 }
@@ -328,6 +282,7 @@ fn render_block(src: &str, highlighter: &Highlighter) -> Vec<Line<'static>> {
 pub struct PreviewCache {
     pub blocks: Vec<MdBlock>,
     prev_map: HashMap<String, usize>,
+    pub highlighter: Highlighter,
 }
 
 impl PreviewCache {
@@ -335,15 +290,15 @@ impl PreviewCache {
         Self {
             blocks: Vec::new(),
             prev_map: HashMap::new(),
+            highlighter: Highlighter::new(),
         }
     }
 
-    pub fn update(&mut self, md: &str, highlighter: &Highlighter) -> (usize, usize) {
+    pub fn update(&mut self, md: &str) -> (usize, usize) {
         let sources = split_into_blocks(md);
         let mut new_blocks = Vec::with_capacity(sources.len());
-        let mut reused = 0usize;
-        let mut rendered = 0usize;
-
+        let mut reused = 0;
+        let mut rendered = 0;
         for src in sources {
             let id = hash_str(&src);
             if let Some(&idx) = self.prev_map.get(&id) {
@@ -355,16 +310,15 @@ impl PreviewCache {
                     }
                 }
             }
-            let rendered_lines = render_block(&src, highlighter);
+            let lines = render_block(&src, &self.highlighter);
             new_blocks.push(MdBlock {
-                source: src.clone(),
-                id: id.clone(),
-                rendered: rendered_lines,
                 incomplete: is_incomplete(&src),
+                source: src,
+                id,
+                lines,
             });
             rendered += 1;
         }
-
         self.prev_map.clear();
         for (i, b) in new_blocks.iter().enumerate() {
             self.prev_map.insert(b.id.clone(), i);
@@ -373,11 +327,7 @@ impl PreviewCache {
         (reused, rendered)
     }
 
-    pub fn all_lines(&self) -> Vec<Line<'static>> {
-        let mut out = Vec::new();
-        for b in &self.blocks {
-            out.extend(b.rendered.clone());
-        }
-        out
+    pub fn all_lines(&self) -> Vec<&PreviewLine> {
+        self.blocks.iter().flat_map(|b| b.lines.iter()).collect()
     }
 }

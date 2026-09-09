@@ -1,47 +1,23 @@
-//! Lightweight terminal Markdown editor v0.2
-//! Incremental blocks · syntect · scroll sync + mouse
-
-mod buffer;
-mod highlight;
+//! rust-md-editor — desktop Markdown editor (egui)
 mod preview;
 mod app;
-mod draw;
-mod events;
 
-use anyhow::Result;
-use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::backend::CrosstermBackend;
-use ratatui::Terminal;
-use std::env;
-use std::io;
-use std::path::PathBuf;
+use app::MdEditorApp;
 
-fn main() -> Result<()> {
-    let path = env::args().nth(1).map(PathBuf::from);
-    let app = app::App::new(path)?;
+fn main() -> eframe::Result<()> {
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1100.0, 720.0])
+            .with_min_inner_size([640.0, 400.0])
+            .with_title("rust-md-editor"),
+        ..Default::default()
+    };
 
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let path = std::env::args().nth(1).map(std::path::PathBuf::from);
 
-    let res = events::run_app(&mut terminal, app);
-
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    if let Err(err) = res {
-        eprintln!("Error: {:?}", err);
-    }
-    Ok(())
+    eframe::run_native(
+        "rust-md-editor",
+        native_options,
+        Box::new(move |cc| Ok(Box::new(MdEditorApp::new(cc, path)))),
+    )
 }
