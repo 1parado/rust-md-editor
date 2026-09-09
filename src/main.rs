@@ -1,5 +1,6 @@
-//! Lightweight terminal Markdown editor v0.2
-//! Incremental blocks · syntect · scroll sync + mouse
-include!("sections/part1.rs");
-include!("sections/part2.rs");
-include!("sections/part3.rs");
+//! Source is stored compressed as `src/main.rs.gz.b64` and expanded by CI before build.
+//! Local expand:
+//!   base64 -d src/main.rs.gz.b64 | gzip -d > src/main.rs
+fn main() {
+    eprintln!("Expand src/main.rs.gz.b64 first (see Agent.md / CI workflow).");
+}
