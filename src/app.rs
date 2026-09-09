@@ -18,38 +18,31 @@ pub struct MdEditorApp {
     find_query: String,
     replace_with: String,
     split: f32,
+    dark: bool,
+    quit_confirm: bool,
 }
 
 impl MdEditorApp {
     pub fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>) -> Self {
-        // Dark-ish default
         let mut style = (*cc.egui_ctx.style()).clone();
         style.visuals = egui::Visuals::dark();
         cc.egui_ctx.set_style(style);
 
         let (source, path) = if let Some(p) = path {
-            (
-                std::fs::read_to_string(&p).unwrap_or_default(),
-                Some(p),
-            )
+            (std::fs::read_to_string(&p).unwrap_or_default(), Some(p))
         } else {
             (
                 String::from(
                     "# rust-md-editor\n\n\
 桌面版 **Markdown** 编辑器（egui）。\n\n\
-- 增量预览（streamdown 风格）\n\
-- 语法高亮代码块\n\
-- 打开 / 保存文件\n\n\
-| Feature | Status |\n\
-|---------|--------|\n\
-| Preview | OK |\n\
-| Find    | OK |\n\n\
+- 增量预览\n\
+- 代码块高亮\n\
+- 打开 / 保存\n\n\
 ```rust\n\
 fn main() {\n\
-    println!(\"Hello GUI\");\n\
+    println!(\"Hello\");\n\
 }\n\
-```\n\n\
-> 未闭合 fence 会显示 streaming…\n",
+```\n",
                 ),
                 None,
             )
@@ -64,14 +57,40 @@ fn main() {\n\
             last_render: 0,
             need_refresh: true,
             last_edit: Instant::now(),
-            status: "Ready".into(),
+            status: "Ready · Ctrl+S save · Ctrl+O open · Ctrl+F find".into(),
             find_open: false,
             find_query: String::new(),
             replace_with: String::new(),
             split: 0.5,
+            dark: true,
+            quit_confirm: false,
         };
         app.refresh_preview();
         app
+    }
+
+    fn apply_theme(&self, ctx: &egui::Context) {
+        let mut style = (*ctx.style()).clone();
+        style.visuals = if self.dark {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        };
+        ctx.set_style(style);
+    }
+
+    fn file_title(&self) -> String {
+        let name = self
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .unwrap_or("untitled.md");
+        if self.dirty {
+            format!("{name} * — rust-md-editor")
+        } else {
+            format!("{name} — rust-md-editor")
+        }
     }
 
     fn refresh_preview(&mut self) {
@@ -79,7 +98,9 @@ fn main() {\n\
         self.last_reuse = r;
         self.last_render = n;
         self.need_refresh = false;
-        self.status = format!("blocks: {r} reused / {n} rendered");
+        if !self.quit_confirm {
+            self.status = format!("blocks: {r} reused / {n} rendered");
+        }
     }
 
     fn save(&mut self) {
@@ -89,6 +110,7 @@ fn main() {\n\
                 return;
             }
             self.dirty = false;
+            self.quit_confirm = false;
             self.status = format!("Saved: {}", path.display());
         } else {
             self.save_as();
@@ -106,6 +128,7 @@ fn main() {\n\
             }
             self.path = Some(path.clone());
             self.dirty = false;
+            self.quit_confirm = false;
             self.status = format!("Saved: {}", path.display());
         }
     }
@@ -120,6 +143,7 @@ fn main() {\n\
                     self.source = s;
                     self.path = Some(path);
                     self.dirty = false;
+                    self.quit_confirm = false;
                     self.need_refresh = true;
                     self.status = "Opened".into();
                 }
@@ -128,26 +152,25 @@ fn main() {\n\
         }
     }
 
+    fn request_quit(&mut self, ctx: &egui::Context) {
+        if !self.dirty || self.quit_confirm {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else {
+            self.quit_confirm = true;
+            self.status = "Unsaved — quit again to discard, or Ctrl+S to save".into();
+        }
+    }
+
     fn find_next(&mut self) {
         let q = self.find_query.to_lowercase();
         if q.is_empty() {
+            self.status = "Find: empty query".into();
             return;
         }
         let lower = self.source.to_lowercase();
-        let start = self
-            .source
-            .char_indices()
-            .nth(
-                // rough: search from mid if possible — simple from 0 cycling
-                0,
-            )
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        let found = lower[start..].find(&q).map(|i| start + i).or_else(|| lower.find(&q));
-        if let Some(idx) = found {
-            // egui TextEdit doesn't expose set cursor easily without TextEditState;
-            // status only for now + scroll hint
-            self.status = format!("Found at byte {idx}");
+        if let Some(idx) = lower.find(&q) {
+            let line = self.source[..idx].bytes().filter(|&b| b == b'\n').count() + 1;
+            self.status = format!("Found near line {line} (byte {idx})");
         } else {
             self.status = "No match".into();
         }
@@ -160,7 +183,7 @@ fn main() {\n\
         let q = self.find_query.to_lowercase();
         let mut out = String::new();
         let mut rest = self.source.as_str();
-        let mut rest_l = self.source.to_lowercase();
+        let rest_l = self.source.to_lowercase();
         let mut rest_l_ref = rest_l.as_str();
         let mut n = 0;
         while let Some(pos) = rest_l_ref.find(&q) {
@@ -174,25 +197,27 @@ fn main() {\n\
         self.source = out;
         self.dirty = true;
         self.need_refresh = true;
+        self.last_edit = Instant::now();
         self.status = format!("Replaced {n}");
     }
 }
 
 impl eframe::App for MdEditorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Debounced preview refresh
         if self.need_refresh && self.last_edit.elapsed() > Duration::from_millis(120) {
             self.refresh_preview();
         }
 
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.file_title()));
+
         egui::TopBottomPanel::top("menu").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("Open…").clicked() {
+                    if ui.button("Open…    Ctrl+O").clicked() {
                         self.open_file();
                         ui.close_menu();
                     }
-                    if ui.button("Save").clicked() {
+                    if ui.button("Save     Ctrl+S").clicked() {
                         self.save();
                         ui.close_menu();
                     }
@@ -202,28 +227,37 @@ impl eframe::App for MdEditorApp {
                     }
                     ui.separator();
                     if ui.button("Quit").clicked() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        self.request_quit(ctx);
+                        ui.close_menu();
                     }
                 });
                 ui.menu_button("Edit", |ui| {
-                    if ui.button("Find / Replace").clicked() {
+                    if ui.button("Find / Replace    Ctrl+F").clicked() {
                         self.find_open = true;
                         ui.close_menu();
                     }
                 });
                 ui.menu_button("View", |ui| {
                     ui.add(egui::Slider::new(&mut self.split, 0.2..=0.8).text("Split"));
+                    if ui
+                        .button(if self.dark {
+                            "Light theme"
+                        } else {
+                            "Dark theme"
+                        })
+                        .clicked()
+                    {
+                        self.dark = !self.dark;
+                        self.apply_theme(ctx);
+                        ui.close_menu();
+                    }
                 });
                 ui.separator();
-                let title = match &self.path {
-                    Some(p) => format!(
-                        "{}{}",
-                        p.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
-                        if self.dirty { " *" } else { "" }
-                    ),
-                    None => format!("untitled.md{}", if self.dirty { " *" } else { "" }),
-                };
-                ui.label(title);
+                ui.label(if self.dirty {
+                    egui::RichText::new("● modified").color(egui::Color32::YELLOW)
+                } else {
+                    egui::RichText::new("○ saved").color(egui::Color32::GRAY)
+                });
             });
         });
 
@@ -234,7 +268,7 @@ impl eframe::App for MdEditorApp {
                     ui.label(format!(
                         "{} chars · {} lines",
                         self.source.len(),
-                        self.source.lines().count()
+                        self.source.lines().count().max(1)
                     ));
                 });
             });
@@ -272,7 +306,6 @@ impl eframe::App for MdEditorApp {
             let left_w = full * self.split;
 
             ui.horizontal(|ui| {
-                // ---- Editor ----
                 ui.allocate_ui(egui::vec2(left_w - 4.0, ui.available_height()), |ui| {
                     ui.vertical(|ui| {
                         ui.label(egui::RichText::new("Source").strong());
@@ -287,6 +320,7 @@ impl eframe::App for MdEditorApp {
                                 );
                                 if response.changed() {
                                     self.dirty = true;
+                                    self.quit_confirm = false;
                                     self.need_refresh = true;
                                     self.last_edit = Instant::now();
                                 }
@@ -296,13 +330,13 @@ impl eframe::App for MdEditorApp {
 
                 ui.separator();
 
-                // ---- Preview ----
                 ui.allocate_ui(egui::vec2(full - left_w - 4.0, ui.available_height()), |ui| {
                     ui.vertical(|ui| {
                         ui.label(
                             egui::RichText::new(format!(
-                                "Preview ({} blocks)",
-                                self.preview.blocks.len()
+                                "Preview ({} blocks · {} reused)",
+                                self.preview.blocks.len(),
+                                self.last_reuse
                             ))
                             .strong(),
                         );
@@ -326,12 +360,11 @@ impl eframe::App for MdEditorApp {
                                         LineKind::Code => egui::RichText::new(&line.text)
                                             .monospace()
                                             .color(egui::Color32::from_rgb(180, 230, 180)),
-                                        LineKind::Quote => egui::RichText::new(format!(
-                                            "│ {}",
-                                            line.text
-                                        ))
-                                        .italics()
-                                        .color(egui::Color32::from_rgb(140, 200, 140)),
+                                        LineKind::Quote => {
+                                            egui::RichText::new(format!("│ {}", line.text))
+                                                .italics()
+                                                .color(egui::Color32::from_rgb(140, 200, 140))
+                                        }
                                         LineKind::Table => egui::RichText::new(&line.text)
                                             .monospace()
                                             .color(egui::Color32::LIGHT_BLUE),
@@ -348,12 +381,6 @@ impl eframe::App for MdEditorApp {
             });
         });
 
-        // Keyboard shortcuts
-        ctx.input(|i| {
-            if i.modifiers.command && i.key_pressed(egui::Key::S) {
-                // handled below via consume — check flags
-            }
-        });
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
             self.save();
         }
@@ -363,8 +390,10 @@ impl eframe::App for MdEditorApp {
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
             self.find_open = true;
         }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Q)) {
+            self.request_quit(ctx);
+        }
 
-        // Keep animating while debounce pending
         if self.need_refresh {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
