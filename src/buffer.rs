@@ -4,6 +4,8 @@ pub struct Buffer {
     pub cursor_row: usize,
     pub cursor_col: usize,
     pub scroll: usize,
+    /// Horizontal scroll in characters (approx by bytes for ASCII-heavy lines)
+    pub h_scroll: usize,
 }
 
 impl Buffer {
@@ -18,6 +20,7 @@ impl Buffer {
             cursor_row: 0,
             cursor_col: 0,
             scroll: 0,
+            h_scroll: 0,
         }
     }
 
@@ -55,6 +58,7 @@ impl Buffer {
         self.cursor_row += 1;
         self.lines.insert(self.cursor_row, rest);
         self.cursor_col = 0;
+        self.h_scroll = 0;
     }
 
     pub fn backspace(&mut self) {
@@ -132,6 +136,7 @@ impl Buffer {
 
     pub fn home(&mut self) {
         self.cursor_col = 0;
+        self.h_scroll = 0;
     }
 
     pub fn end(&mut self) {
@@ -184,6 +189,12 @@ impl Buffer {
         self.cursor_col = i;
     }
 
+    pub fn goto(&mut self, row: usize, col: usize) {
+        self.cursor_row = row.min(self.lines.len().saturating_sub(1));
+        self.cursor_col = col.min(self.lines[self.cursor_row].len());
+        self.clamp_col();
+    }
+
     pub fn ensure_visible(&mut self, height: usize) {
         if height == 0 {
             return;
@@ -192,6 +203,18 @@ impl Buffer {
             self.scroll = self.cursor_row;
         } else if self.cursor_row >= self.scroll + height {
             self.scroll = self.cursor_row - height + 1;
+        }
+    }
+
+    /// Keep cursor_col within [h_scroll, h_scroll + width).
+    pub fn ensure_h_visible(&mut self, width: usize) {
+        if width == 0 {
+            return;
+        }
+        if self.cursor_col < self.h_scroll {
+            self.h_scroll = self.cursor_col;
+        } else if self.cursor_col >= self.h_scroll + width {
+            self.h_scroll = self.cursor_col - width + 1;
         }
     }
 
