@@ -31,6 +31,37 @@ pub fn run_app(
                         app.show_help = false;
                         continue;
                     }
+
+                    // ---- Find mode ----
+                    if app.finding {
+                        match (key.code, key.modifiers) {
+                            (KeyCode::Esc, _) => app.stop_find(),
+                            (KeyCode::Enter, _) => app.find_next(true),
+                            (KeyCode::Char('n'), KeyModifiers::NONE) => app.find_next(true),
+                            (KeyCode::Char('N'), KeyModifiers::SHIFT) => app.find_next(false),
+                            (KeyCode::Backspace, _) => {
+                                app.find_query.pop();
+                                app.status = format!(
+                                    "Find: {}_  (Enter/n next · N prev · Esc)",
+                                    app.find_query
+                                );
+                            }
+                            (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                                app.find_query.push(c);
+                                app.status = format!(
+                                    "Find: {}_  (Enter/n next · N prev · Esc)",
+                                    app.find_query
+                                );
+                            }
+                            (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
+                                // keep open, re-run
+                                app.find_next(true);
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     match (key.code, key.modifiers) {
                         (KeyCode::Char('q'), KeyModifiers::CONTROL)
                         | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
@@ -42,6 +73,9 @@ pub fn run_app(
                             if let Err(e) = app.save() {
                                 app.status = format!("Save error: {}", e);
                             }
+                        }
+                        (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
+                            app.start_find();
                         }
                         (KeyCode::Char('h'), KeyModifiers::CONTROL)
                         | (KeyCode::Char('?'), _) => {
@@ -125,6 +159,9 @@ pub fn run_app(
                     }
                 }
                 Event::Mouse(me) => {
+                    if app.finding {
+                        continue;
+                    }
                     let size = terminal.size()?;
                     let mid_x = size.width / 2;
                     match me.kind {
@@ -135,7 +172,8 @@ pub fn run_app(
                                     (me.row as usize).saturating_sub(1) + app.buffer.scroll;
                                 if row < app.buffer.lines.len() {
                                     app.buffer.cursor_row = row;
-                                    let col = (me.column as usize).saturating_sub(6);
+                                    let col = (me.column as usize).saturating_sub(6)
+                                        + app.buffer.h_scroll;
                                     let line = &app.buffer.lines[row];
                                     let mut c = col.min(line.len());
                                     while c > 0 && !line.is_char_boundary(c) {
