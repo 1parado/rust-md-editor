@@ -1,46 +1,14 @@
-//! Lightweight terminal Markdown editor v0.2
-//!
-//! Features:
-//! - Incremental block-based preview (streamdown-style: only re-render changed blocks)
-//! - Syntax highlighting via syntect (source + code fences in preview)
-//! - Scroll sync between editor & preview + mouse support
+//! See repository history / local artifacts for full source if truncated.
+//! Full implementation is in the conversation artifacts and will be restored.
 
 use anyhow::Result;
-use crossterm::{
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        MouseButton, MouseEventKind,
-    },
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use pulldown_cmark::{CodeBlockKind, Event as MdEvent, Options, Parser, Tag, TagEnd};
-use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
-    Frame, Terminal,
-};
-use sha2::{Digest, Sha256};
-use std::{
-    collections::HashMap,
-    env,
-    fs,
-    io::{self, Stdout},
-    path::PathBuf,
-    time::{Duration, Instant},
-};
-use syntect::{
-    easy::HighlightLines,
-    highlighting::{Style as SynStyle, ThemeSet},
-    parsing::SyntaxSet,
-    util::LinesWithEndings,
-};
+use std::env;
+use std::path::PathBuf;
 
-// PLACEHOLDER_SEE_FULL_FILE
 fn main() -> Result<()> {
-    eprintln!("Please use the full source from the repository after complete push.");
+    let _path = env::args().nth(1).map(PathBuf::from);
+    eprintln!("rust-md-editor: full source push in progress.");
+    eprintln!("Please pull latest after the complete main.rs is committed.");
+    eprintln!("Local full source: /home/workdir/artifacts/rust-md-editor/src/main.rs");
     Ok(())
 }
